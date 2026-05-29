@@ -1,748 +1,155 @@
-<!DOCTYPE html>
+ï»¿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Orca Universal Proxy</title>
 <style>
-:root {
-  --bg: #0f1117;
-  --bg-card: #1a1d27;
-  --bg-card-hover: #222639;
-  --border: #2a2e3f;
-  --text: #e1e4ed;
-  --text-dim: #8b8fa3;
-  --accent: #6c5ce7;
-  --accent-light: #a29bfe;
-  --green: #00b894;
-  --red: #e17055;
-  --yellow: #fdcb6e;
-  --blue: #0984e3;
-  --radius: 10px;
-  --shadow: 0 2px 12px rgba(0,0,0,0.3);
-}
-
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  display: flex;
-}
-
-/* Sidebar */
-.sidebar {
-  width: 220px;
-  min-height: 100vh;
-  background: var(--bg-card);
-  border-right: 1px solid var(--border);
-  padding: 20px 0;
-  display: flex;
-  flex-direction: column;
-  position: fixed;
-  z-index: 10;
-}
-
-.logo {
-  padding: 0 20px 24px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
-}
-
-.logo h1 {
-  font-size: 22px;
-  font-weight: 700;
-  background: linear-gradient(135deg, var(--accent), var(--accent-light));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.logo .version {
-  font-size: 11px;
-  color: var(--text-dim);
-  margin-top: 2px;
-}
-
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 20px;
-  cursor: pointer;
-  color: var(--text-dim);
-  font-size: 14px;
-  transition: all 0.15s;
-  border-left: 3px solid transparent;
-}
-
-.nav-item:hover { background: var(--bg-card-hover); color: var(--text); }
-.nav-item.active { color: var(--accent-light); background: rgba(108,92,231,0.08); border-left-color: var(--accent); }
-.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
-
-.sidebar-footer {
-  margin-top: auto;
-  padding: 16px 20px;
-  border-top: 1px solid var(--border);
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-/* Main content */
-.main {
-  margin-left: 220px;
-  flex: 1;
-  padding: 28px 32px;
-  min-height: 100vh;
-}
-
-.page { display: none; }
-.page.active { display: block; }
-
-.page-title {
-  font-size: 22px;
-  font-weight: 600;
-  margin-bottom: 24px;
-}
-
-/* Cards */
-.card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 16px;
-  box-shadow: var(--shadow);
-}
-
-.card-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 14px;
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* Stats grid */
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 14px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  box-shadow: var(--shadow);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.stat-value {
-  font-size: 28px;
-  font-weight: 700;
-}
-
-.stat-value.green { color: var(--green); }
-.stat-value.blue { color: var(--blue); }
-.stat-value.yellow { color: var(--yellow); }
-.stat-value.accent { color: var(--accent-light); }
-
-/* Provider grid */
-.provider-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
-}
-
-.provider-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
-  cursor: pointer;
-  transition: all 0.15s;
-  box-shadow: var(--shadow);
-}
-
-.provider-card:hover { border-color: var(--accent); transform: translateY(-1px); }
-.provider-card.active { border-color: var(--accent); background: rgba(108,92,231,0.08); }
-
-.provider-name {
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.provider-desc {
-  font-size: 12px;
-  color: var(--text-dim);
-  margin-bottom: 10px;
-}
-
-.provider-models {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-
-.provider-badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 12px;
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.badge-active { background: rgba(0,184,148,0.15); color: var(--green); }
-.badge-key-set { background: rgba(108,92,231,0.15); color: var(--accent-light); }
-.badge-key-missing { background: rgba(225,112,85,0.15); color: var(--red); }
-
-/* Forms */
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-group label {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 6px;
-  color: var(--text-dim);
-}
-
-.form-group input, .form-group select, .form-group textarea {
-  width: 100%;
-  padding: 10px 14px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text);
-  font-size: 14px;
-  font-family: inherit;
-  transition: border-color 0.15s;
-}
-
-.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.form-group input::placeholder { color: var(--text-dim); }
-
-input[type="password"] { font-family: monospace; }
-
-/* Buttons */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 9px 18px;
-  border: none;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
-  font-family: inherit;
-}
-
-.btn-primary {
-  background: var(--accent);
-  color: white;
-}
-
-.btn-primary:hover { background: var(--accent-light); }
-
-.btn-secondary {
-  background: var(--bg-card-hover);
-  color: var(--text);
-  border: 1px solid var(--border);
-}
-
-.btn-secondary:hover { border-color: var(--accent); }
-
-.btn-sm { padding: 6px 12px; font-size: 12px; }
-
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.btn-group { display: flex; gap: 8px; margin-top: 16px; }
-
-/* Log viewer */
-.log-container {
-  background: #0a0c10;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px;
-  max-height: 500px;
-  overflow-y: auto;
-  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
-  font-size: 12px;
-  line-height: 1.7;
-}
-
-.log-entry { padding: 2px 0; }
-.log-entry .time { color: var(--text-dim); }
-.log-entry .level-info { color: var(--blue); }
-.log-entry .level-warn { color: var(--yellow); }
-.log-entry .level-error { color: var(--red); }
-.log-entry .level-debug { color: var(--text-dim); }
-
-.log-controls {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-  align-items: center;
-}
-
-.log-controls label {
-  font-size: 13px;
-  color: var(--text-dim);
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-/* Config guide */
-.guide-box {
-  background: rgba(108,92,231,0.06);
-  border: 1px solid rgba(108,92,231,0.2);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 16px;
-}
-
-.guide-box h4 {
-  font-size: 14px;
-  margin-bottom: 10px;
-  color: var(--accent-light);
-}
-
-.guide-box code {
-  display: block;
-  background: var(--bg);
-  padding: 10px 14px;
-  border-radius: 6px;
-  font-size: 13px;
-  margin: 8px 0;
-  white-space: pre-wrap;
-  word-break: break-all;
-  font-family: "Cascadia Code", "Fira Code", monospace;
-  color: var(--green);
-}
-
-.guide-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
-
-/* Toast */
-.toast {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  padding: 12px 20px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
-  z-index: 100;
-  animation: slideIn 0.3s ease;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-}
-
-.toast-success { background: var(--green); color: white; }
-.toast-error { background: var(--red); color: white; }
-
-@keyframes slideIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
-
-/* Pulse animation for active status */
-.pulse {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--green);
-  animation: pulse 2s infinite;
-}
-
-@keyframes pulse {
-  0% { box-shadow: 0 0 0 0 rgba(0,184,148,0.4); }
-  70% { box-shadow: 0 0 0 8px rgba(0,184,148,0); }
-  100% { box-shadow: 0 0 0 0 rgba(0,184,148,0); }
-}
-
-/* Responsive */
-@media (max-width: 768px) {
-  .sidebar { width: 60px; padding: 12px 0; }
-  .logo h1, .logo .version, .nav-item span, .sidebar-footer { display: none; }
-  .nav-item { justify-content: center; padding: 12px; }
-  .main { margin-left: 60px; padding: 16px; }
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .provider-grid { grid-template-columns: 1fr; }
-}
+:root{--bg:#0a0b10;--bgs:#12131a;--bgc:#161822;--bgh:#1e2030;--bgi:#0e0f16;--bd:#252840;--bdl:#2d3055;--tx:#e8eaf0;--txd:#7b7f99;--txm:#555877;--ac:#7c6aff;--ab:rgba(124,106,255,0.08);--gn:#3dd68c;--gb:rgba(61,214,140,0.1);--rd:#f25c5c;--rb:rgba(242,92,92,0.1);--yl:#f0c246;--yb:rgba(240,194,70,0.1);--bl:#4dabf7;--bb:rgba(77,171,247,0.1);--r:12px;--rs:8px;--sh:0 2px 20px rgba(0,0,0,0.25);--tr:all 0.2s ease}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--tx);min-height:100vh;display:flex;line-height:1.6}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--bd);border-radius:3px}
+.sidebar{width:240px;min-height:100vh;background:var(--bgs);border-right:1px solid var(--bd);padding:24px 0;display:flex;flex-direction:column;position:fixed;z-index:10}
+.logo{padding:0 24px 28px;border-bottom:1px solid var(--bd);margin-bottom:16px}
+.logo h1{font-size:26px;font-weight:800;background:linear-gradient(135deg,#7c6aff 0%,#b794f6 50%,#4dabf7 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.logo .ver{font-size:11px;color:var(--txm);margin-top:4px}
+.nav{display:flex;align-items:center;gap:12px;padding:12px 24px;cursor:pointer;color:var(--txd);font-size:14px;font-weight:500;transition:var(--tr);border-left:3px solid transparent;margin:2px 0}
+.nav:hover{background:var(--ab);color:var(--tx)}.nav.active{color:var(--ac);background:var(--ab);border-left-color:var(--ac)}
+.nav svg{width:18px;height:18px;flex-shrink:0}
+.sf{margin-top:auto;padding:20px 24px;border-top:1px solid var(--bd)}
+.si{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.pulse{width:8px;height:8px;border-radius:50%;background:var(--gn);box-shadow:0 0 12px rgba(61,214,140,0.4);animation:pulse 2s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(61,214,140,0.4)}70%{box-shadow:0 0 0 8px rgba(61,214,140,0)}100%{box-shadow:0 0 0 0 rgba(61,214,140,0)}}
+.st{font-size:13px;color:var(--gn);font-weight:500}.pt{font-size:12px;color:var(--txm)}
+.main{margin-left:240px;flex:1;padding:32px 40px;min-height:100vh}
+.pg{display:none;animation:fi 0.3s ease}.pg.active{display:block}
+@keyframes fi{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.ph{margin-bottom:32px}.ptitle{font-size:28px;font-weight:700;margin-bottom:6px}.psub{font-size:14px;color:var(--txd)}
+.sg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:32px}
+.sc{background:var(--bgc);border:1px solid var(--bd);border-radius:var(--r);padding:20px 22px;transition:var(--tr);position:relative;overflow:hidden}
+.sc::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--ac),transparent);opacity:0;transition:var(--tr)}
+.sc:hover{border-color:var(--bdl);transform:translateY(-2px)}.sc:hover::before{opacity:1}
+.si2{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+.si2.blue{background:var(--bb);color:var(--bl)}.si2.purple{background:var(--ab);color:var(--ac)}
+.si2.yellow{background:var(--yb);color:var(--yl)}.si2.red{background:var(--rb);color:var(--rd)}
+.si2.green{background:var(--gb);color:var(--gn)}
+.sl{font-size:12px;color:var(--txd);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.8px;font-weight:500}
+.sv{font-size:32px;font-weight:700;letter-spacing:-1px}
+.cd{background:var(--bgc);border:1px solid var(--bd);border-radius:var(--r);padding:24px;margin-bottom:20px;box-shadow:var(--sh)}
+.ct{font-size:16px;font-weight:600;margin-bottom:18px;display:flex;align-items:center;gap:10px}
+.pg2{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.pc{background:var(--bgc);border:1px solid var(--bd);border-radius:var(--r);padding:22px;cursor:pointer;transition:var(--tr);position:relative;overflow:hidden}
+.pc::before{content:"";position:absolute;top:0;left:0;width:4px;height:100%;background:var(--ac);opacity:0;transition:var(--tr)}
+.pc:hover{border-color:var(--ac);transform:translateY(-3px);box-shadow:0 8px 30px rgba(124,106,255,0.15)}
+.pc.active{border-color:var(--ac);background:var(--ab)}.pc.active::before{opacity:1}
+.pch{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.pn{font-size:17px;font-weight:600}.pd{font-size:13px;color:var(--txd);margin-bottom:14px;line-height:1.5}
+.pm{font-size:12px;color:var(--txm);padding-top:14px;border-top:1px solid var(--bd)}
+.pm span{display:inline-block;background:var(--bg);padding:3px 8px;border-radius:6px;margin:2px 4px 2px 0;font-family:monospace;font-size:11px}
+.bg{display:inline-flex;align-items:center;padding:4px 10px;border-radius:20px;font-size:11px;font-weight:600}
+.bg-a{background:var(--gb);color:var(--gn);border:1px solid rgba(61,214,140,0.2)}
+.bg-k{background:var(--ab);color:var(--ac);border:1px solid rgba(124,106,255,0.2)}
+.bg-m{background:var(--rb);color:var(--rd);border:1px solid rgba(242,92,92,0.2)}
+.fg{margin-bottom:20px}.fl{display:block;font-size:13px;font-weight:500;margin-bottom:8px;color:var(--txd)}
+.fi,.fs{width:100%;padding:12px 16px;background:var(--bgi);border:1px solid var(--bd);border-radius:var(--rs);color:var(--tx);font-size:14px;font-family:inherit;transition:var(--tr)}
+.fi:focus,.fs:focus{outline:none;border-color:var(--ac);box-shadow:0 0 0 3px rgba(124,106,255,0.1)}
+.fi::placeholder{color:var(--txm)}input[type=password]{font-family:monospace;letter-spacing:2px}
+.fgr{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:10px 20px;border:none;border-radius:var(--rs);font-size:13px;font-weight:600;cursor:pointer;transition:var(--tr);font-family:inherit}
+.btn-p{background:linear-gradient(135deg,var(--ac) 0%,#9b8aff 100%);color:white;box-shadow:0 4px 15px rgba(124,106,255,0.3)}
+.btn-p:hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(124,106,255,0.4)}
+.btn-s{background:var(--bgh);color:var(--tx);border:1px solid var(--bd)}
+.btn-s:hover{border-color:var(--ac);background:var(--ab)}.btn-sm{padding:7px 14px;font-size:12px}
+.btn:disabled{opacity:0.5;cursor:not-allowed}.bg2{display:flex;gap:10px;margin-top:24px}
+.lc{background:var(--bgi);border:1px solid var(--bd);border-radius:var(--r);padding:18px;max-height:600px;overflow-y:auto;font-family:monospace;font-size:12.5px;line-height:1.8}
+.le{padding:3px 0;border-bottom:1px solid rgba(37,40,64,0.5)}.le:last-child{border-bottom:none}
+.lt{color:var(--txm)}.ll{font-weight:600;padding:1px 6px;border-radius:4px;font-size:11px}
+.ll-info{background:var(--bb);color:var(--bl)}.ll-warn{background:var(--yb);color:var(--yl)}
+.ll-error{background:var(--rb);color:var(--rd)}.ll-debug{background:rgba(123,127,153,0.1);color:var(--txd)}
+.lctrl{display:flex;gap:10px;margin-bottom:16px;align-items:center}
+.lctrl label{font-size:13px;color:var(--txd);display:flex;align-items:center;gap:8px;cursor:pointer}
+.gb{background:var(--ab);border:1px solid rgba(124,106,255,0.15);border-radius:var(--r);padding:22px;margin-bottom:20px}
+.gb h4{font-size:15px;margin-bottom:12px;color:var(--ac);display:flex;align-items:center;gap:8px}
+.gb p{font-size:13px;color:var(--txd);margin-bottom:10px}
+.gb code{display:block;background:var(--bg);padding:14px 18px;border-radius:var(--rs);font-size:13px;margin:12px 0;white-space:pre-wrap;word-break:break-all;font-family:monospace;color:var(--gn);border:1px solid var(--bd);line-height:1.6}
+.gb code.il{display:inline;margin:0;padding:2px 8px}
+.tst{position:fixed;top:24px;right:24px;padding:14px 22px;border-radius:var(--rs);font-size:13px;font-weight:600;z-index:100;animation:si 0.3s ease;box-shadow:0 8px 30px rgba(0,0,0,0.3);display:flex;align-items:center;gap:10px}
+.tst-ok{background:var(--gn);color:#0a0b10}.tst-err{background:var(--rd);color:white}
+@keyframes si{from{opacity:0;transform:translateX(40px)}to{opacity:1;transform:translateX(0)}}
+.es{text-align:center;padding:60px 20px;color:var(--txd)}.es svg{margin-bottom:16px;opacity:0.5}.es p{font-size:14px}
+@media(max-width:900px){.sidebar{width:70px;padding:16px 0}.logo h1,.logo .ver,.nav span,.sf .pt{display:none}.nav{justify-content:center;padding:14px}.main{margin-left:70px;padding:20px}.sg{grid-template-columns:repeat(2,1fr)}.pg2,.fgr{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
 <nav class="sidebar">
-  <div class="logo">
-    <h1>Orca</h1>
-    <div class="version">Universal Proxy v2.0.0</div>
-  </div>
-  <div class="nav-item active" data-page="dashboard">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-    <span>ÒÇ±íÅÌ</span>
-  </div>
-  <div class="nav-item" data-page="providers">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
-    <span>Ìá¹©ÉÌ</span>
-  </div>
-  <div class="nav-item" data-page="settings">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-    <span>ÅäÖÃ</span>
-  </div>
-  <div class="nav-item" data-page="logs">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-    <span>ÈÕÖ¾</span>
-  </div>
-  <div class="nav-item" data-page="guide">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-    <span>Ê¹ÓÃÖ¸ÄÏ</span>
-  </div>
-  <div class="sidebar-footer">
-    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-      <span class="pulse"></span>
-      <span id="sidebar-status">ÔËĞĞÖĞ</span>
-    </div>
-    <div id="sidebar-provider">-</div>
-  </div>
+<div class="logo"><h1>Orca</h1><div class="ver">Universal Proxy v2.0</div></div>
+<div class="nav active" data-page="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span>ä»ªè¡¨ç›˜</span></div>
+<div class="nav" data-page="providers"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4"/></svg><span>æä¾›å•†</span></div>
+<div class="nav" data-page="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span>é…ç½®</span></div>
+<div class="nav" data-page="logs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg><span>æ—¥å¿—</span></div>
+<div class="nav" data-page="guide"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg><span>ä½¿ç”¨æŒ‡å—</span></div>
+<div class="sf"><div class="si"><span class="pulse"></span><span class="st" id="sidebar-status">è¿è¡Œä¸­</span></div><div class="pt" id="sidebar-provider">-</div></div>
 </nav>
-
 <div class="main">
-
-  <!-- Dashboard -->
-  <div class="page active" id="page-dashboard">
-    <div class="page-title">ÒÇ±íÅÌ</div>
-    <div class="stats-grid">
-      <div class="stat-card"><div class="stat-label">×ÜÇëÇóÊı</div><div class="stat-value blue" id="stat-total">0</div></div>
-      <div class="stat-card"><div class="stat-label">Codex ÇëÇó</div><div class="stat-value accent" id="stat-codex">0</div></div>
-      <div class="stat-card"><div class="stat-label">Claude ÇëÇó</div><div class="stat-value yellow" id="stat-claude">0</div></div>
-      <div class="stat-card"><div class="stat-label">´íÎóÊı</div><div class="stat-value" id="stat-errors" style="color:var(--red)">0</div></div>
-      <div class="stat-card"><div class="stat-label">×Ü Token</div><div class="stat-value green" id="stat-tokens">0</div></div>
-      <div class="stat-card"><div class="stat-label">ÔËĞĞÊ±¼ä</div><div class="stat-value" id="stat-uptime" style="font-size:20px">-</div></div>
-    </div>
-    <div class="card">
-      <div class="card-title"><span class="pulse"></span> µ±Ç°»îÔ¾Ìá¹©ÉÌ</div>
-      <div id="active-provider-info" style="font-size:14px;">¼ÓÔØÖĞ...</div>
-    </div>
-    <div class="card">
-      <div class="card-title">¿ìËÙÅäÖÃ</div>
-      <div id="quick-guide"></div>
-    </div>
-  </div>
-
-  <!-- Providers -->
-  <div class="page" id="page-providers">
-    <div class="page-title">Ìá¹©ÉÌ¹ÜÀí</div>
-    <p style="color:var(--text-dim);font-size:13px;margin-bottom:20px;">µã»÷¿¨Æ¬Ñ¡ÔñÄ¬ÈÏÌá¹©ÉÌ£¬ÔÚÅäÖÃÒ³ÃæÉèÖÃ API Key</p>
-    <div class="provider-grid" id="provider-grid"></div>
-  </div>
-
-  <!-- Settings -->
-  <div class="page" id="page-settings">
-    <div class="page-title">ÅäÖÃ</div>
-    <div class="card">
-      <div class="card-title">API Key ÉèÖÃ</div>
-      <div id="api-key-forms"></div>
-      <div class="btn-group">
-        <button class="btn btn-primary" onclick="saveConfig()">±£´æÅäÖÃ</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">·şÎñÆ÷ÉèÖÃ</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        <div class="form-group">
-          <label>¼àÌı¶Ë¿Ú</label>
-          <input type="number" id="cfg-port" value="3000" min="1024" max="65535">
-        </div>
-        <div class="form-group">
-          <label>ÈÕÖ¾¼¶±ğ</label>
-          <select id="cfg-loglevel">
-            <option value="debug">Debug</option>
-            <option value="info" selected>Info</option>
-            <option value="warn">Warn</option>
-            <option value="error">Error</option>
-          </select>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Logs -->
-  <div class="page" id="page-logs">
-    <div class="page-title">ÇëÇóÈÕÖ¾</div>
-    <div class="log-controls">
-      <button class="btn btn-secondary btn-sm" onclick="refreshLogs()">Ë¢ĞÂ</button>
-      <button class="btn btn-secondary btn-sm" onclick="clearLogs()">Çå¿Õ</button>
-      <label><input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()"> ×Ô¶¯Ë¢ĞÂ</label>
-      <span style="margin-left:auto;font-size:12px;color:var(--text-dim);" id="log-count">0 ÌõÈÕÖ¾</span>
-    </div>
-    <div class="log-container" id="log-container"></div>
-  </div>
-
-  <!-- Guide -->
-  <div class="page" id="page-guide">
-    <div class="page-title">Ê¹ÓÃÖ¸ÄÏ</div>
-    <div class="guide-box">
-      <h4>Codex CLI ÅäÖÃ</h4>
-      <p>ÔÚÖÕ¶ËÖĞÉèÖÃ»·¾³±äÁ¿ºóÔËĞĞ Codex£º</p>
-      <code>$env:OPENAI_BASE_URL = "http://127.0.0.1:3000/v1"
+<div class="pg active" id="page-dashboard">
+<div class="ph"><div class="ptitle">ä»ªè¡¨ç›˜</div><div class="psub">å®æ—¶ç›‘æ§ä»£ç†æœåŠ¡çŠ¶æ€å’Œè¯·æ±‚ç»Ÿè®¡</div></div>
+<div class="sg">
+<div class="sc"><div class="si2 blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div class="sl">æ€»è¯·æ±‚æ•°</div><div class="sv" id="stat-total">0</div></div>
+<div class="sc"><div class="si2 purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg></div><div class="sl">Codex è¯·æ±‚</div><div class="sv" id="stat-codex">0</div></div>
+<div class="sc"><div class="si2 yellow"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div class="sl">Claude è¯·æ±‚</div><div class="sv" id="stat-claude">0</div></div>
+<div class="sc"><div class="si2 red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><div class="sl">é”™è¯¯æ•°</div><div class="sv" id="stat-errors">0</div></div>
+<div class="sc"><div class="si2 green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V10M18 20V4M6 20v-4"/></svg></div><div class="sl">æ€» Token</div><div class="sv" id="stat-tokens">0</div></div>
+<div class="sc"><div class="si2 blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div class="sl">è¿è¡Œæ—¶é—´</div><div class="sv" id="stat-uptime" style="font-size:22px">-</div></div>
+</div>
+<div class="cd"><div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4"/></svg> å½“å‰æ´»è·ƒæä¾›å•†</div><div id="active-provider-info">åŠ è½½ä¸­...</div></div>
+<div class="cd"><div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> å¿«é€Ÿé…ç½®</div><div id="quick-guide"></div></div>
+</div>
+<div class="pg" id="page-providers">
+<div class="ph"><div class="ptitle">æä¾›å•†ç®¡ç†</div><div class="psub">é€‰æ‹©é»˜è®¤æä¾›å•†ï¼Œé…ç½®å„å¹³å° API Key</div></div>
+<div class="pg2" id="provider-grid"></div>
+</div>
+<div class="pg" id="page-settings">
+<div class="ph"><div class="ptitle">é…ç½®</div><div class="psub">ç®¡ç† API Key å’ŒæœåŠ¡å™¨è®¾ç½®</div></div>
+<div class="cd"><div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> API Key è®¾ç½®</div><div id="api-key-forms"></div><div class="bg2"><button class="btn btn-p" onclick="saveConfig()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg> ä¿å­˜é…ç½®</button></div></div>
+<div class="cd"><div class="ct"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> æœåŠ¡å™¨è®¾ç½®</div><div class="fgr"><div class="fg"><label class="fl">ç›‘å¬ç«¯å£</label><input type="number" id="cfg-port" class="fi" value="3000" min="1024" max="65535"></div><div class="fg"><label class="fl">æ—¥å¿—çº§åˆ«</label><select id="cfg-loglevel" class="fs"><option value="debug">Debug</option><option value="info" selected>Info</option><option value="warn">Warn</option><option value="error">Error</option></select></div></div></div>
+</div>
+<div class="pg" id="page-logs">
+<div class="ph"><div class="ptitle">è¯·æ±‚æ—¥å¿—</div><div class="psub">æŸ¥çœ‹å®æ—¶è¯·æ±‚è®°å½•å’Œé”™è¯¯ä¿¡æ¯</div></div>
+<div class="lctrl"><button class="btn btn-s btn-sm" onclick="refreshLogs()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> åˆ·æ–°</button><button class="btn btn-s btn-sm" onclick="clearLogs()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> æ¸…ç©º</button><label><input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()"> è‡ªåŠ¨åˆ·æ–°</label><span style="margin-left:auto;font-size:12px;color:var(--txd);" id="log-count">0 æ¡æ—¥å¿—</span></div>
+<div class="lc" id="log-container"></div>
+</div>
+<div class="pg" id="page-guide">
+<div class="ph"><div class="ptitle">ä½¿ç”¨æŒ‡å—</div><div class="psub">é…ç½® Codex CLI å’Œ Claude æ¡Œé¢ç«¯è¿æ¥ä»£ç†</div></div>
+<div class="gb"><h4><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg> Codex CLI é…ç½®</h4><p>åœ¨ç»ˆç«¯ä¸­è®¾ç½®ç¯å¢ƒå˜é‡åè¿è¡Œ Codexï¼š</p><code>$env:OPENAI_BASE_URL = "http://127.0.0.1:3000/v1"
 $env:OPENAI_API_KEY = "sk-dummy"
-codex "ÄãºÃ"</code>
-    </div>
-    <div class="guide-box">
-      <h4>Claude ×ÀÃæ¶ËÅäÖÃ</h4>
-      <p>±à¼­ Claude Desktop ÅäÖÃÎÄ¼ş£¨claude_desktop_config.json£©£¬Ìí¼Ó´úÀíÉèÖÃ£º</p>
-      <code>{
-  "mcpServers": {},
+codex "ä½ å¥½"</code></div>
+<div class="gb"><h4><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Claude æ¡Œé¢ç«¯é…ç½®</h4><p>ç¼–è¾‘ Claude Desktop é…ç½®æ–‡ä»¶ï¼Œæ·»åŠ ä»£ç†è®¾ç½®ï¼š</p><code>{
   "proxy": {
     "url": "http://127.0.0.1:3000"
   }
-}</code>
-      <p style="margin-top:10px;">ÅäÖÃÎÄ¼şÎ»ÖÃ£º</p>
-      <p>Windows: %APPDATA%\Claude\claude_desktop_config.json</p>
-      <p>macOS: ~/Library/Application Support/Claude/claude_desktop_config.json</p>
-    </div>
-    <div class="guide-box">
-      <h4>Ö§³ÖµÄ¹ú²úÄ£ĞÍ</h4>
-      <p>DeepSeek / Í¨ÒåÇ§ÎÊ / ÖÇÆ×GLM / ÔÂÖ®°µÃæ / °Ù´¨ / ÁãÒ»ÍòÎï / ¶¹°ü / ¹è»ùÁ÷¶¯</p>
-      <p style="margin-top:8px;">Ã¿¸öÌá¹©ÉÌĞèÒªµ¥¶ÀÅäÖÃ API Key£¬¿ÉÔÚ¡¸Ìá¹©ÉÌ¡¹Ò³ÃæÑ¡ÔñÄ¬ÈÏÌá¹©ÉÌ¡£</p>
-    </div>
-    <div class="guide-box">
-      <h4>OpenAI ¼æÈİÖ±Í¨</h4>
-      <p>Ò²¿ÉÒÔÖ±½ÓÊ¹ÓÃ OpenAI ¸ñÊ½µ÷ÓÃÈÎºÎÒÑÅäÖÃµÄÌá¹©ÉÌ£º</p>
-      <code>curl http://127.0.0.1:3000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Hi"}]}'</code>
-    </div>
-  </div>
-
+}</code><p style="margin-top:14px;">Windows: <code class="il">%APPDATA%\Claude\claude_desktop_config.json</code></p><p>macOS: <code class="il">~/Library/Application Support/Claude/claude_desktop_config.json</code></p></div>
+<div class="gb"><h4><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4"/></svg> æ”¯æŒçš„å›½äº§æ¨¡å‹</h4><p>DeepSeek / é€šä¹‰åƒé—® / æ™ºè°±GLM / æœˆä¹‹æš—é¢ / ç™¾å· / é›¶ä¸€ä¸‡ç‰© / è±†åŒ… / ç¡…åŸºæµåŠ¨</p></div>
+<div class="gb"><h4><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> OpenAI å…¼å®¹ç›´é€š</h4><p>ä¹Ÿå¯ä»¥ç›´æ¥ä½¿ç”¨ OpenAI æ ¼å¼è°ƒç”¨ï¼š</p><code>curl http://127.0.0.1:3000/v1/chat/completions -H "Content-Type: application/json" -d "{\"model\":\"deepseek-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"Hi\"}]}"</code></div>
 </div>
-
+</div>
 <script>
-// ---- State ----
-let providers = [];
-let config = {};
-let autoRefreshInterval = null;
-
-// ---- Navigation ----
-document.querySelectorAll('.nav-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    item.classList.add('active');
-    document.getElementById('page-' + item.dataset.page).classList.add('active');
-    if (item.dataset.page === 'logs') refreshLogs();
-    if (item.dataset.page === 'providers') renderProviders();
-    if (item.dataset.page === 'settings') renderSettings();
-  });
-});
-
-// ---- API helpers ----
-async function api(path, opts) {
-  const resp = await fetch('/api/' + path, opts);
-  return resp.json();
-}
-
-function toast(msg, type) {
-  const el = document.createElement('div');
-  el.className = 'toast toast-' + (type || 'success');
-  el.textContent = msg;
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 3000);
-}
-
-// ---- Dashboard ----
-async function refreshDashboard() {
-  try {
-    const status = await api('status');
-    const s = status.stats;
-    document.getElementById('stat-total').textContent = s.totalRequests;
-    document.getElementById('stat-codex').textContent = s.codexRequests;
-    document.getElementById('stat-claude').textContent = s.claudeRequests;
-    document.getElementById('stat-errors').textContent = s.errors;
-    document.getElementById('stat-tokens').textContent = s.totalTokens.toLocaleString();
-
-    const uptime = Math.floor(status.uptime);
-    const h = Math.floor(uptime / 3600);
-    const m = Math.floor((uptime % 3600) / 60);
-    const sec = uptime % 60;
-    document.getElementById('stat-uptime').textContent = `${h}h ${m}m ${sec}s`;
-
-    const ap = status.activeProvider;
-    document.getElementById('active-provider-info').innerHTML =
-      `<strong>${ap.name}</strong> <span class="provider-badge badge-active">»îÔ¾</span><br>` +
-      `<span style="font-size:12px;color:var(--text-dim);margin-top:4px;display:block;">${ap.baseUrl}</span>`;
-    document.getElementById('sidebar-provider').textContent = ap.name;
-
-    renderQuickGuide(status);
-  } catch(e) {
-    document.getElementById('sidebar-status').textContent = 'Á¬½ÓÊ§°Ü';
-  }
-}
-
-function renderQuickGuide(status) {
-  const port = 3000;
-  document.getElementById('quick-guide').innerHTML = `
-    <div class="guide-box" style="margin:0;">
-      <h4>Codex CLI</h4>
-      <code>$env:OPENAI_BASE_URL = "http://127.0.0.1:${port}/v1"
-$env:OPENAI_API_KEY = "sk-dummy"
-codex "ÄãºÃ"</code>
-      <h4 style="margin-top:14px;">Claude ×ÀÃæ¶Ë</h4>
-      <p>ÔÚ claude_desktop_config.json ÖĞÉèÖÃ proxy Îª http://127.0.0.1:${port}</p>
-    </div>
-  `;
-}
-
-// ---- Providers ----
-async function refreshProviders() {
-  providers = await api('providers');
-  config = await api('config');
-}
-
-async function renderProviders() {
-  await refreshProviders();
-  const grid = document.getElementById('provider-grid');
-  grid.innerHTML = providers.map(p => {
-    const isActive = p.id === config.activeProviderId;
-    const hasKey = p.apiKey && p.apiKey.length > 0;
-    const models = p.models.map(m => m.id).join(', ');
-    return `
-      <div class="provider-card ${isActive ? 'active' : ''}" onclick="selectProvider('${p.id}')">
-        <div class="provider-name">
-          ${p.name}
-          ${isActive ? '<span class="provider-badge badge-active">Ä¬ÈÏ</span>' : ''}
-          ${hasKey ? '<span class="provider-badge badge-key-set">Key ÒÑÅäÖÃ</span>' : '<span class="provider-badge badge-key-missing">Î´ÅäÖÃ</span>'}
-        </div>
-        <div class="provider-desc">${p.description}</div>
-        <div class="provider-models">Ä£ĞÍ: ${models}</div>
-      </div>
-    `;
-  }).join('');
-}
-
-async function selectProvider(id) {
-  try {
-    await api('config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ activeProviderId: id }),
-    });
-    toast('ÒÑÇĞ»»µ½ ' + providers.find(p => p.id === id).name);
-    renderProviders();
-    refreshDashboard();
-  } catch(e) {
-    toast('ÇĞ»»Ê§°Ü', 'error');
-  }
-}
-
-async function testProvider(id) {
-  const btn = event.target;
-  btn.disabled = true;
-  btn.textContent = '²âÊÔÖĞ...';
-  try {
-    const result = await api('test-provider', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ providerId: id }),
-    });
-    toast(result.message, result.ok ? 'success' : 'error');
-  } catch(e) {
-    toast('²âÊÔÊ§°Ü', 'error');
-  }
-  btn.disabled = false;
-  btn.textContent = '²âÊÔÁ¬½Ó';
-}
-
-// ---- Settings ----
-async function renderSettings() {
-  await refreshProviders();
-  const form = document.getElementById('api-key-forms');
-  form.innerHTML = providers.map(p => `
-    <div class="form-group">
-      <label>${p.name} API Key ${p.apiKey ? '<span style="color:var(--green);font-size:11px;">(ÒÑÅäÖÃ)</span>' : ''}</label>
-      <input type="password" id="key-${p.id}" placeholder="ÊäÈë ${p.name} API Key..." value="">
-    </div>
-  `).join('');
-}
-
-async function saveConfig() {
-  const providerKeys = {};
-  providers.forEach(p => {
-    const input = document.getElementById('key-' + p.id);
-    if (input && input.value) providerKeys[p.id] = input.value;
-  });
-
-  try {
-    await api('config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        providerKeys,
-        port: parseInt(document.getElementById('cfg-port').value) || 3000,
-        logLevel: document.getElementById('cfg-loglevel').value,
-      }),
-    });
-    toast('ÅäÖÃÒÑ±£´æ');
-  } catch(e) {
-    toast('±£´æÊ§°Ü', 'error');
-  }
-}
-
-// ---- Logs ----
-async function refreshLogs() {
-  try {
-    const logs = await api('logs?limit=200');
-    const container = document.getElementById('log-container');
-    document.getElementById('log-count').textContent = logs.length + ' ÌõÈÕÖ¾';
-    container.innerHTML = logs.map(l => {
-      const time = l.time.split('T')[1].split('.')[0];
-      return `<div class="log-entry"><span class="time">${time}</span> <span class="level-${l.level}">[${l.level.toUpperCase()}]</span> ${l.message}</div>`;
-    }).join('');
-    container.scrollTop = container.scrollHeight;
-  } catch(e) {}
-}
-
-async function clearLogs() {
-  await api('logs', { method: 'DELETE' });
-  refreshLogs();
-}
-
-function toggleAutoRefresh() {
-  if (document.getElementById('auto-refresh').checked) {
-    autoRefreshInterval = setInterval(refreshLogs, 3000);
-  } else {
-    clearInterval(autoRefreshInterval);
-  }
-}
-
-// ---- Init ----
-refreshDashboard();
-setInterval(refreshDashboard, 5000);
-toggleAutoRefresh();
+var providers=[];
+var config={};
+var autoRefreshInterval=null;
+document.querySelectorAll('.nav').forEach(function(item){item.addEventListener('click',function(){document.querySelectorAll('.nav').forEach(function(i){i.classList.remove('active')});document.querySelectorAll('.pg').forEach(function(p){p.classList.remove('active')});item.classList.add('active');var page=document.getElementById('page-'+item.dataset.page);page.classList.add('active');if(item.dataset.page==='logs')refreshLogs();if(item.dataset.page==='providers')renderProviders();if(item.dataset.page==='settings')renderSettings()})});
+function api(path,opts){return fetch('/api/'+path,opts).then(function(r){return r.json()})}
+function toast(msg,type){var el=document.createElement('div');el.className='tst tst-'+(type||'ok');el.textContent=(type==='err'?'\u2716 ':'\u2714 ')+msg;document.body.appendChild(el);setTimeout(function(){el.remove()},3000)}
+function refreshDashboard(){api('status').then(function(status){var s=status.stats;document.getElementById('stat-total').textContent=s.totalRequests;document.getElementById('stat-codex').textContent=s.codexRequests;document.getElementById('stat-claude').textContent=s.claudeRequests;document.getElementById('stat-errors').textContent=s.errors;document.getElementById('stat-tokens').textContent=s.totalTokens.toLocaleString();var uptime=Math.floor(status.uptime);var h=Math.floor(uptime/3600);var m=Math.floor((uptime%3600)/60);var sec=uptime%60;document.getElementById('stat-uptime').textContent=h+'h '+m+'m '+sec+'s';var ap=status.activeProvider;document.getElementById('active-provider-info').innerHTML='<div style="display:flex;align-items:center;gap:16px;"><div><div style="font-size:20px;font-weight:600;margin-bottom:4px;">'+ap.name+'</div><div style="font-size:13px;color:var(--txd);font-family:monospace;">'+ap.baseUrl+'</div></div><span class="bg bg-a">\u6d3b\u8dc3</span></div>';document.getElementById('sidebar-provider').textContent=ap.name;renderQuickGuide()}).catch(function(){document.getElementById('sidebar-status').textContent='\u8fde\u63a5\u5931\u8d25';document.getElementById('sidebar-status').style.color='var(--rd)'})}
+function renderQuickGuide(){document.getElementById('quick-guide').innerHTML='<div class="gb" style="margin:0;"><h4>Codex CLI</h4><code>$env:OPENAI_BASE_URL = "http://127.0.0.1:3000/v1"\n$env:OPENAI_API_KEY = "sk-dummy"\ncodex "\u4f60\u597d"</code><h4 style="margin-top:16px;">Claude \u684c\u9762\u7aef</h4><p>\u5728 claude_desktop_config.json \u4e2d\u8bbe\u7f6e proxy \u4e3a <code class="il">http://127.0.0.1:3000</code></p></div>'}
+function refreshProviders(){return Promise.all([api('providers'),api('config')]).then(function(r){providers=r[0];config=r[1]})}
+function renderProviders(){refreshProviders().then(function(){var grid=document.getElementById('provider-grid');grid.innerHTML=providers.map(function(p){var isActive=p.id===config.activeProviderId;var hasKey=p.apiKey&&p.apiKey.length>0;var models=p.models.map(function(m){return '<span>'+m.id+'</span>'}).join('');return '<div class="pc '+(isActive?'active':'')+'" onclick="selectProvider(\''+p.id+'\')"><div class="pch"><div class="pn">'+p.name+'</div><div>'+(isActive?'<span class="bg bg-a">\u9ed8\u8ba4</span>':'')+(hasKey?'<span class="bg bg-k">Key \u5df2\u914d\u7f6e</span>':'<span class="bg bg-m">\u672a\u914d\u7f6e</span>')+'</div></div><div class="pd">'+p.description+'</div><div class="pm">'+models+'</div></div>'}).join('')})}
+function selectProvider(id){api('config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({activeProviderId:id})}).then(function(){toast('\u5df2\u5207\u6362\u5230 '+providers.find(function(p){return p.id===id}).name);renderProviders();refreshDashboard()}).catch(function(){toast('\u5207\u6362\u5931\u8d25','err')})}
+function renderSettings(){refreshProviders().then(function(){var form=document.getElementById('api-key-forms');form.innerHTML=providers.map(function(p){return '<div class="fg"><label class="fl">'+p.name+' API Key '+(p.apiKey?'<span style="color:var(--gn);font-size:11px;margin-left:8px;">(\u5df2\u914d\u7f6e)</span>':'')+'</label><input type="password" id="key-'+p.id+'" class="fi" placeholder="\u8f93\u5165 '+p.name+' API Key..."></div>'}).join('')})}
+function saveConfig(){var providerKeys={};providers.forEach(function(p){var input=document.getElementById('key-'+p.id);if(input&&input.value)providerKeys[p.id]=input.value});api('config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({providerKeys:providerKeys,port:parseInt(document.getElementById('cfg-port').value)||3000,logLevel:document.getElementById('cfg-loglevel').value})}).then(function(){toast('\u914d\u7f6e\u5df2\u4fdd\u5b58')}).catch(function(){toast('\u4fdd\u5b58\u5931\u8d25','err')})}
+function refreshLogs(){api('logs?limit=200').then(function(logs){var container=document.getElementById('log-container');document.getElementById('log-count').textContent=logs.length+' \u6761\u65e5\u5fd7';if(logs.length===0){container.innerHTML='<div class="es"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><p>\u6682\u65e0\u65e5\u5fd7</p></div>';return}container.innerHTML=logs.map(function(l){var time=l.time.split('T')[1].split('.')[0];return '<div class="le"><span class="lt">'+time+'</span> <span class="ll ll-'+l.level+'">'+l.level.toUpperCase()+'</span> '+l.message+'</div>'}).join('');container.scrollTop=container.scrollHeight}).catch(function(){})}
+function clearLogs(){api('logs',{method:'DELETE'}).then(function(){refreshLogs()})}
+function toggleAutoRefresh(){if(document.getElementById('auto-refresh').checked){autoRefreshInterval=setInterval(refreshLogs,3000)}else{clearInterval(autoRefreshInterval)}}
+refreshDashboard();setInterval(refreshDashboard,5000);toggleAutoRefresh();
 </script>
 </body>
 </html>
