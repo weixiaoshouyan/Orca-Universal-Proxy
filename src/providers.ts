@@ -1,6 +1,6 @@
 // ============================================================
 // src/providers.ts
-// 国产大模型 API 提供商注册表
+// Multi-provider registry for Chinese LLM APIs
 // ============================================================
 
 export interface ProviderModel {
@@ -21,8 +21,6 @@ export interface Provider {
   description: string;
 }
 
-// ---- 内置提供商定义 --------------------------------------------------------
-
 export const BUILTIN_PROVIDERS: Provider[] = [
   {
     id: "deepseek",
@@ -30,7 +28,7 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     baseUrl: "https://api.deepseek.com",
     apiKeyEnv: "DEEPSEEK_API_KEY",
     openaiCompatible: true,
-    description: "深度求索 - 高性价比推理模型",
+    description: "\u6DF1\u5EA6\u6C42\u7D22 - \u9AD8\u6027\u4EF7\u6BD4\u63A8\u7406\u6A21\u578B",
     models: [
       { id: "deepseek-chat", name: "DeepSeek Chat" },
       { id: "deepseek-reasoner", name: "DeepSeek Reasoner", reasoning: true },
@@ -38,11 +36,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "qwen",
-    name: "通义千问",
+    name: "\u901A\u4E49\u5343\u95EE",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode",
     apiKeyEnv: "DASHSCOPE_API_KEY",
     openaiCompatible: true,
-    description: "阿里云通义千问系列模型",
+    description: "\u963F\u91CC\u4E91\u901A\u4E49\u5343\u95EE\u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "qwen-turbo", name: "Qwen Turbo" },
       { id: "qwen-plus", name: "Qwen Plus" },
@@ -52,11 +50,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "zhipu",
-    name: "智谱AI",
+    name: "\u667A\u8C31AI",
     baseUrl: "https://open.bigmodel.cn/api/paas",
     apiKeyEnv: "ZHIPU_API_KEY",
     openaiCompatible: true,
-    description: "智谱 GLM 系列模型",
+    description: "\u667A\u8C31 GLM \u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "glm-4-flash", name: "GLM-4 Flash" },
       { id: "glm-4", name: "GLM-4" },
@@ -65,11 +63,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "moonshot",
-    name: "月之暗面",
+    name: "\u6708\u4E4B\u6697\u9762",
     baseUrl: "https://api.moonshot.cn",
     apiKeyEnv: "MOONSHOT_API_KEY",
     openaiCompatible: true,
-    description: "Moonshot / Kimi 系列模型",
+    description: "Moonshot / Kimi \u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "moonshot-v1-8k", name: "Moonshot V1 8K" },
       { id: "moonshot-v1-32k", name: "Moonshot V1 32K" },
@@ -78,11 +76,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "baichuan",
-    name: "百川智能",
+    name: "\u767E\u5DDD\u667A\u80FD",
     baseUrl: "https://api.baichuan-ai.com",
     apiKeyEnv: "BAICHUAN_API_KEY",
     openaiCompatible: true,
-    description: "百川大模型",
+    description: "\u767E\u5DDD\u5927\u6A21\u578B",
     models: [
       { id: "Baichuan4", name: "Baichuan 4" },
       { id: "Baichuan3-Turbo", name: "Baichuan 3 Turbo" },
@@ -90,11 +88,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "yi",
-    name: "零一万物",
+    name: "\u96F6\u4E00\u4E07\u7269",
     baseUrl: "https://api.lingyiwanwu.com",
     apiKeyEnv: "YI_API_KEY",
     openaiCompatible: true,
-    description: "Yi / 零一万物系列模型",
+    description: "Yi / \u96F6\u4E00\u4E07\u7269\u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "yi-large", name: "Yi Large" },
       { id: "yi-medium", name: "Yi Medium" },
@@ -103,11 +101,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "doubao",
-    name: "豆包",
+    name: "\u8C46\u5305",
     baseUrl: "https://ark.cn-beijing.volces.com/api",
     apiKeyEnv: "DOUBAO_API_KEY",
     openaiCompatible: true,
-    description: "火山引擎豆包大模型",
+    description: "\u706B\u5C71\u5F15\u64CE\u8C46\u5305\u5927\u6A21\u578B",
     models: [
       { id: "doubao-pro-4k", name: "Doubao Pro 4K" },
       { id: "doubao-pro-32k", name: "Doubao Pro 32K" },
@@ -116,11 +114,11 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   },
   {
     id: "siliconflow",
-    name: "硅基流动",
+    name: "\u7845\u57FA\u6D41\u52A8",
     baseUrl: "https://api.siliconflow.cn",
     apiKeyEnv: "SILICONFLOW_API_KEY",
     openaiCompatible: true,
-    description: "SiliconFlow - 多模型聚合平台",
+    description: "SiliconFlow - \u591A\u6A21\u578B\u805A\u5408\u5E73\u53F0",
     models: [
       { id: "deepseek-ai/DeepSeek-V3", name: "DeepSeek V3" },
       { id: "Qwen/Qwen2.5-72B-Instruct", name: "Qwen 2.5 72B" },
@@ -133,7 +131,7 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     baseUrl: "https://api.openai.com",
     apiKeyEnv: "OPENAI_API_KEY",
     openaiCompatible: true,
-    description: "OpenAI GPT 系列模型（直连）",
+    description: "OpenAI GPT \u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "gpt-4o", name: "GPT-4o" },
       { id: "gpt-4o-mini", name: "GPT-4o Mini" },
@@ -147,15 +145,15 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     baseUrl: "https://api.anthropic.com",
     apiKeyEnv: "ANTHROPIC_API_KEY",
     openaiCompatible: false,
-    description: "Claude 系列模型（直连）",
+    description: "Claude \u7CFB\u5217\u6A21\u578B",
     models: [
       { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4" },
       { id: "claude-3-5-haiku-20241022", name: "Claude 3.5 Haiku" },
     ],
   },
 ];
-
-// ---- 运行时配置管理 --------------------------------------------------------
+import path from "path";
+import fs from "fs";
 
 export interface RuntimeConfig {
   activeProviderId: string;
@@ -166,7 +164,7 @@ export interface RuntimeConfig {
   logLevel: string;
 }
 
-const CONFIG_PATH = require("path").join(__dirname, "..", "data", "config.json");
+const CONFIG_PATH = path.join(__dirname, "..", "data", "config.json");
 
 function defaultConfig(): RuntimeConfig {
   return {
@@ -184,13 +182,12 @@ let _config: RuntimeConfig = null as any;
 export function loadConfig(): RuntimeConfig {
   if (_config) return _config;
   try {
-    const raw = require("fs").readFileSync(CONFIG_PATH, "utf-8");
+    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
     _config = { ...defaultConfig(), ...JSON.parse(raw) };
   } catch {
     _config = defaultConfig();
     saveConfig(_config);
   }
-  // Merge env keys directly from BUILTIN_PROVIDERS (avoid circular call)
   for (const p of BUILTIN_PROVIDERS) {
     if (p.apiKeyEnv && process.env[p.apiKeyEnv]) {
       if (!_config.providerKeys[p.id]) {
@@ -198,7 +195,6 @@ export function loadConfig(): RuntimeConfig {
       }
     }
   }
-  // Also accept legacy DEEPSEEK_API_KEY
   if (process.env.DEEPSEEK_API_KEY && !_config.providerKeys["deepseek"]) {
     _config.providerKeys["deepseek"] = process.env.DEEPSEEK_API_KEY;
   }
@@ -208,8 +204,8 @@ export function loadConfig(): RuntimeConfig {
 export function saveConfig(cfg: RuntimeConfig): void {
   _config = cfg;
   try {
-    require("fs").mkdirSync(require("path").dirname(CONFIG_PATH), { recursive: true });
-    require("fs").writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf-8");
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), "utf-8");
   } catch (e) {
     console.error("Failed to save config:", e);
   }
@@ -236,24 +232,21 @@ export function getApiKey(providerId: string): string {
 
 export function resolveModel(requested: string): { provider: Provider; model: string; apiKey: string } {
   const cfg = loadConfig();
-  // Check overrides first
   if (cfg.modelOverrides[requested]) {
     const mapped = cfg.modelOverrides[requested];
     const [provId, modelId] = mapped.includes("/") ? mapped.split("/", 2) : [cfg.activeProviderId, mapped];
     const prov = getProvider(provId) || getActiveProvider();
     return { provider: prov, model: modelId, apiKey: getApiKey(prov.id) };
   }
-  // Check if model belongs to a non-active provider that has an API key configured
   for (const prov of getAllProviders()) {
     if (prov.id === cfg.activeProviderId) continue;
-    if (!getApiKey(prov.id)) continue; // skip providers without API key
+    if (!getApiKey(prov.id)) continue;
     for (const m of prov.models) {
       if (m.id === requested) {
         return { provider: prov, model: requested, apiKey: getApiKey(prov.id) };
       }
     }
   }
-  // Default: use active provider, but map foreign model names to provider's models
   const active = getActiveProvider();
   const isNative = active.models.some(m => m.id === requested);
   const finalModel = isNative ? requested : (active.models[0]?.id || requested);
