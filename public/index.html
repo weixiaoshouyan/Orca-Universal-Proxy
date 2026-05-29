@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Orca Universal Proxy</title>
+<style>
+:root {
+  --bg: #0f1117;
+  --bg-card: #1a1d27;
+  --bg-card-hover: #222639;
+  --border: #2a2e3f;
+  --text: #e1e4ed;
+  --text-dim: #8b8fa3;
+  --accent: #6c5ce7;
+  --accent-light: #a29bfe;
+  --green: #00b894;
+  --red: #e17055;
+  --yellow: #fdcb6e;
+  --blue: #0984e3;
+  --radius: 10px;
+  --shadow: 0 2px 12px rgba(0,0,0,0.3);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+}
+
+/* Sidebar */
+.sidebar {
+  width: 220px;
+  min-height: 100vh;
+  background: var(--bg-card);
+  border-right: 1px solid var(--border);
+  padding: 20px 0;
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  z-index: 10;
+}
+
+.logo {
+  padding: 0 20px 24px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+
+.logo h1 {
+  font-size: 22px;
+  font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--accent-light));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.logo .version {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 14px;
+  transition: all 0.15s;
+  border-left: 3px solid transparent;
+}
+
+.nav-item:hover { background: var(--bg-card-hover); color: var(--text); }
+.nav-item.active { color: var(--accent-light); background: rgba(108,92,231,0.08); border-left-color: var(--accent); }
+.nav-item svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+.sidebar-footer {
+  margin-top: auto;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* Main content */
+.main {
+  margin-left: 220px;
+  flex: 1;
+  padding: 28px 32px;
+  min-height: 100vh;
+}
+
+.page { display: none; }
+.page.active { display: block; }
+
+.page-title {
+  font-size: 22px;
+  font-weight: 600;
+  margin-bottom: 24px;
+}
+
+/* Cards */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow);
+}
+
+.card-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 14px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Stats grid */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-value {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.stat-value.green { color: var(--green); }
+.stat-value.blue { color: var(--blue); }
+.stat-value.yellow { color: var(--yellow); }
+.stat-value.accent { color: var(--accent-light); }
+
+/* Provider grid */
+.provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.provider-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  cursor: pointer;
+  transition: all 0.15s;
+  box-shadow: var(--shadow);
+}
+
+.provider-card:hover { border-color: var(--accent); transform: translateY(-1px); }
+.provider-card.active { border-color: var(--accent); background: rgba(108,92,231,0.08); }
+
+.provider-name {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.provider-models {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.provider-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.badge-active { background: rgba(0,184,148,0.15); color: var(--green); }
+.badge-key-set { background: rgba(108,92,231,0.15); color: var(--accent-light); }
+.badge-key-missing { background: rgba(225,112,85,0.15); color: var(--red); }
+
+/* Forms */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%;
+  padding: 10px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.form-group input::placeholder { color: var(--text-dim); }
+
+input[type="password"] { font-family: monospace; }
+
+/* Buttons */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: none;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: inherit;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: white;
+}
+
+.btn-primary:hover { background: var(--accent-light); }
+
+.btn-secondary {
+  background: var(--bg-card-hover);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn-secondary:hover { border-color: var(--accent); }
+
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-group { display: flex; gap: 8px; margin-top: 16px; }
+
+/* Log viewer */
+.log-container {
+  background: #0a0c10;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  max-height: 500px;
+  overflow-y: auto;
+  font-family: "Cascadia Code", "Fira Code", "JetBrains Mono", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.log-entry { padding: 2px 0; }
+.log-entry .time { color: var(--text-dim); }
+.log-entry .level-info { color: var(--blue); }
+.log-entry .level-warn { color: var(--yellow); }
+.log-entry .level-error { color: var(--red); }
+.log-entry .level-debug { color: var(--text-dim); }
+
+.log-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+  align-items: center;
+}
+
+.log-controls label {
+  font-size: 13px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* Config guide */
+.guide-box {
+  background: rgba(108,92,231,0.06);
+  border: 1px solid rgba(108,92,231,0.2);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.guide-box h4 {
+  font-size: 14px;
+  margin-bottom: 10px;
+  color: var(--accent-light);
+}
+
+.guide-box code {
+  display: block;
+  background: var(--bg);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin: 8px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+  color: var(--green);
+}
+
+.guide-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 6px; }
+
+/* Toast */
+.toast {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 100;
+  animation: slideIn 0.3s ease;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+.toast-success { background: var(--green); color: white; }
+.toast-error { background: var(--red); color: white; }
+
+@keyframes slideIn { from { opacity: 0; transform: translateX(30px); } to { opacity: 1; transform: translateX(0); } }
+
+/* Pulse animation for active status */
+.pulse {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 0 rgba(0,184,148,0.4); }
+  70% { box-shadow: 0 0 0 8px rgba(0,184,148,0); }
+  100% { box-shadow: 0 0 0 0 rgba(0,184,148,0); }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .sidebar { width: 60px; padding: 12px 0; }
+  .logo h1, .logo .version, .nav-item span, .sidebar-footer { display: none; }
+  .nav-item { justify-content: center; padding: 12px; }
+  .main { margin-left: 60px; padding: 16px; }
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .provider-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<nav class="sidebar">
+  <div class="logo">
+    <h1>Orca</h1>
+    <div class="version">Universal Proxy v2.0.0</div>
+  </div>
+  <div class="nav-item active" data-page="dashboard">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+    <span>仪表盘</span>
+  </div>
+  <div class="nav-item" data-page="providers">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+    <span>提供商</span>
+  </div>
+  <div class="nav-item" data-page="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    <span>配置</span>
+  </div>
+  <div class="nav-item" data-page="logs">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    <span>日志</span>
+  </div>
+  <div class="nav-item" data-page="guide">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+    <span>使用指南</span>
+  </div>
+  <div class="sidebar-footer">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+      <span class="pulse"></span>
+      <span id="sidebar-status">运行中</span>
+    </div>
+    <div id="sidebar-provider">-</div>
+  </div>
+</nav>
+
+<div class="main">
+
+  <!-- Dashboard -->
+  <div class="page active" id="page-dashboard">
+    <div class="page-title">仪表盘</div>
+    <div class="stats-grid">
+      <div class="stat-card"><div class="stat-label">总请求数</div><div class="stat-value blue" id="stat-total">0</div></div>
+      <div class="stat-card"><div class="stat-label">Codex 请求</div><div class="stat-value accent" id="stat-codex">0</div></div>
+      <div class="stat-card"><div class="stat-label">Claude 请求</div><div class="stat-value yellow" id="stat-claude">0</div></div>
+      <div class="stat-card"><div class="stat-label">错误数</div><div class="stat-value" id="stat-errors" style="color:var(--red)">0</div></div>
+      <div class="stat-card"><div class="stat-label">总 Token</div><div class="stat-value green" id="stat-tokens">0</div></div>
+      <div class="stat-card"><div class="stat-label">运行时间</div><div class="stat-value" id="stat-uptime" style="font-size:20px">-</div></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="pulse"></span> 当前活跃提供商</div>
+      <div id="active-provider-info" style="font-size:14px;">加载中...</div>
+    </div>
+    <div class="card">
+      <div class="card-title">快速配置</div>
+      <div id="quick-guide"></div>
+    </div>
+  </div>
+
+  <!-- Providers -->
+  <div class="page" id="page-providers">
+    <div class="page-title">提供商管理</div>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:20px;">点击卡片选择默认提供商，在配置页面设置 API Key</p>
+    <div class="provider-grid" id="provider-grid"></div>
+  </div>
+
+  <!-- Settings -->
+  <div class="page" id="page-settings">
+    <div class="page-title">配置</div>
+    <div class="card">
+      <div class="card-title">API Key 设置</div>
+      <div id="api-key-forms"></div>
+      <div class="btn-group">
+        <button class="btn btn-primary" onclick="saveConfig()">保存配置</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">服务器设置</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="form-group">
+          <label>监听端口</label>
+          <input type="number" id="cfg-port" value="3000" min="1024" max="65535">
+        </div>
+        <div class="form-group">
+          <label>日志级别</label>
+          <select id="cfg-loglevel">
+            <option value="debug">Debug</option>
+            <option value="info" selected>Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logs -->
+  <div class="page" id="page-logs">
+    <div class="page-title">请求日志</div>
+    <div class="log-controls">
+      <button class="btn btn-secondary btn-sm" onclick="refreshLogs()">刷新</button>
+      <button class="btn btn-secondary btn-sm" onclick="clearLogs()">清空</button>
+      <label><input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()"> 自动刷新</label>
+      <span style="margin-left:auto;font-size:12px;color:var(--text-dim);" id="log-count">0 条日志</span>
+    </div>
+    <div class="log-container" id="log-container"></div>
+  </div>
+
+  <!-- Guide -->
+  <div class="page" id="page-guide">
+    <div class="page-title">使用指南</div>
+    <div class="guide-box">
+      <h4>Codex CLI 配置</h4>
+      <p>在终端中设置环境变量后运行 Codex：</p>
+      <code>$env:OPENAI_BASE_URL = "http://127.0.0.1:3000/v1"
+$env:OPENAI_API_KEY = "sk-dummy"
+codex "你好"</code>
+    </div>
+    <div class="guide-box">
+      <h4>Claude 桌面端配置</h4>
+      <p>编辑 Claude Desktop 配置文件（claude_desktop_config.json），添加代理设置：</p>
+      <code>{
+  "mcpServers": {},
+  "proxy": {
+    "url": "http://127.0.0.1:3000"
+  }
+}</code>
+      <p style="margin-top:10px;">配置文件位置：</p>
+      <p>Windows: %APPDATA%\Claude\claude_desktop_config.json</p>
+      <p>macOS: ~/Library/Application Support/Claude/claude_desktop_config.json</p>
+    </div>
+    <div class="guide-box">
+      <h4>支持的国产模型</h4>
+      <p>DeepSeek / 通义千问 / 智谱GLM / 月之暗面 / 百川 / 零一万物 / 豆包 / 硅基流动</p>
+      <p style="margin-top:8px;">每个提供商需要单独配置 API Key，可在「提供商」页面选择默认提供商。</p>
+    </div>
+    <div class="guide-box">
+      <h4>OpenAI 兼容直通</h4>
+      <p>也可以直接使用 OpenAI 格式调用任何已配置的提供商：</p>
+      <code>curl http://127.0.0.1:3000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-chat","messages":[{"role":"user","content":"Hi"}]}'</code>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---- State ----
+let providers = [];
+let config = {};
+let autoRefreshInterval = null;
+
+// ---- Navigation ----
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    item.classList.add('active');
+    document.getElementById('page-' + item.dataset.page).classList.add('active');
+    if (item.dataset.page === 'logs') refreshLogs();
+    if (item.dataset.page === 'providers') renderProviders();
+    if (item.dataset.page === 'settings') renderSettings();
+  });
+});
+
+// ---- API helpers ----
+async function api(path, opts) {
+  const resp = await fetch('/api/' + path, opts);
+  return resp.json();
+}
+
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.className = 'toast toast-' + (type || 'success');
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// ---- Dashboard ----
+async function refreshDashboard() {
+  try {
+    const status = await api('status');
+    const s = status.stats;
+    document.getElementById('stat-total').textContent = s.totalRequests;
+    document.getElementById('stat-codex').textContent = s.codexRequests;
+    document.getElementById('stat-claude').textContent = s.claudeRequests;
+    document.getElementById('stat-errors').textContent = s.errors;
+    document.getElementById('stat-tokens').textContent = s.totalTokens.toLocaleString();
+
+    const uptime = Math.floor(status.uptime);
+    const h = Math.floor(uptime / 3600);
+    const m = Math.floor((uptime % 3600) / 60);
+    const sec = uptime % 60;
+    document.getElementById('stat-uptime').textContent = `${h}h ${m}m ${sec}s`;
+
+    const ap = status.activeProvider;
+    document.getElementById('active-provider-info').innerHTML =
+      `<strong>${ap.name}</strong> <span class="provider-badge badge-active">活跃</span><br>` +
+      `<span style="font-size:12px;color:var(--text-dim);margin-top:4px;display:block;">${ap.baseUrl}</span>`;
+    document.getElementById('sidebar-provider').textContent = ap.name;
+
+    renderQuickGuide(status);
+  } catch(e) {
+    document.getElementById('sidebar-status').textContent = '连接失败';
+  }
+}
+
+function renderQuickGuide(status) {
+  const port = 3000;
+  document.getElementById('quick-guide').innerHTML = `
+    <div class="guide-box" style="margin:0;">
+      <h4>Codex CLI</h4>
+      <code>$env:OPENAI_BASE_URL = "http://127.0.0.1:${port}/v1"
+$env:OPENAI_API_KEY = "sk-dummy"
+codex "你好"</code>
+      <h4 style="margin-top:14px;">Claude 桌面端</h4>
+      <p>在 claude_desktop_config.json 中设置 proxy 为 http://127.0.0.1:${port}</p>
+    </div>
+  `;
+}
+
+// ---- Providers ----
+async function refreshProviders() {
+  providers = await api('providers');
+  config = await api('config');
+}
+
+async function renderProviders() {
+  await refreshProviders();
+  const grid = document.getElementById('provider-grid');
+  grid.innerHTML = providers.map(p => {
+    const isActive = p.id === config.activeProviderId;
+    const hasKey = p.apiKey && p.apiKey.length > 0;
+    const models = p.models.map(m => m.id).join(', ');
+    return `
+      <div class="provider-card ${isActive ? 'active' : ''}" onclick="selectProvider('${p.id}')">
+        <div class="provider-name">
+          ${p.name}
+          ${isActive ? '<span class="provider-badge badge-active">默认</span>' : ''}
+          ${hasKey ? '<span class="provider-badge badge-key-set">Key 已配置</span>' : '<span class="provider-badge badge-key-missing">未配置</span>'}
+        </div>
+        <div class="provider-desc">${p.description}</div>
+        <div class="provider-models">模型: ${models}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function selectProvider(id) {
+  try {
+    await api('config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activeProviderId: id }),
+    });
+    toast('已切换到 ' + providers.find(p => p.id === id).name);
+    renderProviders();
+    refreshDashboard();
+  } catch(e) {
+    toast('切换失败', 'error');
+  }
+}
+
+async function testProvider(id) {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '测试中...';
+  try {
+    const result = await api('test-provider', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ providerId: id }),
+    });
+    toast(result.message, result.ok ? 'success' : 'error');
+  } catch(e) {
+    toast('测试失败', 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = '测试连接';
+}
+
+// ---- Settings ----
+async function renderSettings() {
+  await refreshProviders();
+  const form = document.getElementById('api-key-forms');
+  form.innerHTML = providers.map(p => `
+    <div class="form-group">
+      <label>${p.name} API Key ${p.apiKey ? '<span style="color:var(--green);font-size:11px;">(已配置)</span>' : ''}</label>
+      <input type="password" id="key-${p.id}" placeholder="输入 ${p.name} API Key..." value="">
+    </div>
+  `).join('');
+}
+
+async function saveConfig() {
+  const providerKeys = {};
+  providers.forEach(p => {
+    const input = document.getElementById('key-' + p.id);
+    if (input && input.value) providerKeys[p.id] = input.value;
+  });
+
+  try {
+    await api('config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        providerKeys,
+        port: parseInt(document.getElementById('cfg-port').value) || 3000,
+        logLevel: document.getElementById('cfg-loglevel').value,
+      }),
+    });
+    toast('配置已保存');
+  } catch(e) {
+    toast('保存失败', 'error');
+  }
+}
+
+// ---- Logs ----
+async function refreshLogs() {
+  try {
+    const logs = await api('logs?limit=200');
+    const container = document.getElementById('log-container');
+    document.getElementById('log-count').textContent = logs.length + ' 条日志';
+    container.innerHTML = logs.map(l => {
+      const time = l.time.split('T')[1].split('.')[0];
+      return `<div class="log-entry"><span class="time">${time}</span> <span class="level-${l.level}">[${l.level.toUpperCase()}]</span> ${l.message}</div>`;
+    }).join('');
+    container.scrollTop = container.scrollHeight;
+  } catch(e) {}
+}
+
+async function clearLogs() {
+  await api('logs', { method: 'DELETE' });
+  refreshLogs();
+}
+
+function toggleAutoRefresh() {
+  if (document.getElementById('auto-refresh').checked) {
+    autoRefreshInterval = setInterval(refreshLogs, 3000);
+  } else {
+    clearInterval(autoRefreshInterval);
+  }
+}
+
+// ---- Init ----
+refreshDashboard();
+setInterval(refreshDashboard, 5000);
+toggleAutoRefresh();
+</script>
+</body>
+</html>

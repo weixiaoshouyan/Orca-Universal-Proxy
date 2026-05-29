@@ -1,7 +1,7 @@
 {
-  "name": "orca-deepseek-proxy",
-  "version": "1.0.0",
-  "description": "Proxy bridging Codex CLI (OpenAI Responses API) to DeepSeek Chat Completions API",
+  "name": "orca-universal-proxy",
+  "version": "2.0.0",
+  "description": "Universal proxy for Codex CLI, Claude Desktop, and all major Chinese LLM APIs",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
