@@ -391,4 +391,131 @@ app.listen(PORT, HOST, () => {
   log("info", "  Claude Desktop:");
   log("info", `    Set proxy in claude_desktop_config.json to http://${HOST}:${PORT}`);
   log("info", "");
+});import { execSync, spawn } from "child_process";
+
+// ---- App Management API ----
+
+interface AppInfo {
+  id: string;
+  name: string;
+  icon: string;
+  installed: boolean;
+  path: string;
+  running: boolean;
+  description: string;
+  launchArgs?: string[];
+}
+
+function scanApps(): AppInfo[] {
+  const apps: AppInfo[] = [];
+
+  // Codex CLI
+  let codexPath = "";
+  let codexInstalled = false;
+  try { codexPath = execSync("where codex 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; codexInstalled = true; } catch {}
+
+  // Claude Desktop
+  let claudePath = "";
+  let claudeInstalled = false;
+  const claudeLocal = process.env.LOCALAPPDATA + "\\Claude\\Claude.exe";
+  const claudeProgram = "C:\\Program Files\\Claude\\Claude.exe";
+  if (require("fs").existsSync(claudeLocal)) { claudePath = claudeLocal; claudeInstalled = true; }
+  else if (require("fs").existsSync(claudeProgram)) { claudePath = claudeProgram; claudeInstalled = true; }
+
+  // Cursor
+  let cursorPath = "";
+  let cursorInstalled = false;
+  const cursorLocal = process.env.LOCALAPPDATA + "\\Programs\\cursor\\Cursor.exe";
+  if (require("fs").existsSync(cursorLocal)) { cursorPath = cursorLocal; cursorInstalled = true; }
+
+  // VS Code
+  let vscodePath = "";
+  let vscodeInstalled = false;
+  try { vscodePath = execSync("where code 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; vscodeInstalled = true; } catch {}
+
+  // Check running processes
+  let runningProcs = "";
+  try { runningProcs = execSync("tasklist /FO CSV /NH 2>nul", { encoding: "utf-8" }); } catch {}
+
+  apps.push({
+    id: "codex", name: "Codex CLI", icon: "terminal",
+    installed: codexInstalled, path: codexPath,
+    running: runningProcs.includes("codex"),
+    description: "OpenAI Codex command-line tool"
+  });
+  apps.push({
+    id: "claude", name: "Claude Desktop", icon: "message-square",
+    installed: claudeInstalled, path: claudePath,
+    running: runningProcs.includes("Claude"),
+    description: "Anthropic Claude desktop application",
+    launchArgs: []
+  });
+  apps.push({
+    id: "cursor", name: "Cursor", icon: "code",
+    installed: cursorInstalled, path: cursorPath,
+    running: runningProcs.includes("Cursor"),
+    description: "AI-powered code editor"
+  });
+  apps.push({
+    id: "vscode", name: "VS Code", icon: "file-code",
+    installed: vscodeInstalled, path: vscodePath,
+    running: runningProcs.includes("Code"),
+    description: "Visual Studio Code editor"
+  });
+
+  return apps;
+}
+
+app.get("/api/apps", (_req, res) => {
+  try { res.json(scanApps()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post("/api/apps/:id/launch", (req, res) => {
+  const { id } = req.params;
+  const { providerId } = req.body;
+  const provider = getProvider(providerId || loadConfig().activeProviderId);
+  if (!provider) return res.status(404).json({ error: "Provider not found" });
+
+  const apiKey = getApiKey(provider.id);
+  const proxyUrl = `http://${HOST}:${PORT}`;
+
+  try {
+    if (id === "codex") {
+      const child = spawn("cmd", ["/c", "start", "cmd", "/k",
+        `set OPENAI_BASE_URL=${proxyUrl}/v1&& set OPENAI_API_KEY=sk-dummy&& echo.&& echo Orca Proxy: ${proxyUrl}/v1&& echo Provider: ${provider.name}&& echo.&& echo Run: codex "your prompt"&& echo.`
+      ], { detached: true, stdio: "ignore" });
+      child.unref();
+      res.json({ ok: true, message: `Codex CLI terminal opened with ${provider.name}` });
+    } else if (id === "claude") {
+      const claudeLocal = process.env.LOCALAPPDATA + "\\Claude\\Claude.exe";
+      const claudeProgram = "C:\\Program Files\\Claude\\Claude.exe";
+      const claudePath = require("fs").existsSync(claudeLocal) ? claudeLocal : claudeProgram;
+      const child = spawn(claudePath, [], {
+        detached: true, stdio: "ignore",
+        env: { ...process.env, ANTHROPIC_BASE_URL: proxyUrl }
+      });
+      child.unref();
+      res.json({ ok: true, message: `Claude Desktop launched with ${provider.name}` });
+    } else if (id === "cursor") {
+      const cursorPath = process.env.LOCALAPPDATA + "\\Programs\\cursor\\Cursor.exe";
+      const child = spawn(cursorPath, [], {
+        detached: true, stdio: "ignore",
+        env: { ...process.env, OPENAI_BASE_URL: `${proxyUrl}/v1`, OPENAI_API_KEY: "sk-dummy" }
+      });
+      child.unref();
+      res.json({ ok: true, message: `Cursor launched with ${provider.name}` });
+    } else if (id === "vscode") {
+      const child = spawn("cmd", ["/c", "start", "", "code"], {
+        detached: true, stdio: "ignore",
+        env: { ...process.env, OPENAI_BASE_URL: `${proxyUrl}/v1`, OPENAI_API_KEY: "sk-dummy" }
+      });
+      child.unref();
+      res.json({ ok: true, message: `VS Code launched with ${provider.name}` });
+    } else {
+      res.status(404).json({ error: "Unknown app" });
+    }
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
 });
