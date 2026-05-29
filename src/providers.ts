@@ -126,6 +126,20 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     ],
   },
   {
+    id: "xiaomi",
+    name: "\u5c0f\u7c73 MiMo",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com",
+    apiKeyEnv: "XIAOMI_API_KEY",
+    openaiCompatible: true,
+    description: "\u5c0f\u7c73 TokenPlan MiMo \u5927\u6a21\u578b",
+    models: [
+      { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", reasoning: true },
+      { id: "mimo-v2.5", name: "MiMo V2.5" },
+      { id: "mimo-v2-pro", name: "MiMo V2 Pro", reasoning: true },
+      { id: "mimo-v2-omni", name: "MiMo V2 Omni" },
+    ],
+  },
+  {
     id: "openai",
     name: "OpenAI",
     baseUrl: "https://api.openai.com",
