@@ -11,11 +11,24 @@ interface SettingsProps {
 
 export default function Settings({ lang, setLang }: SettingsProps) {
   const [config, setConfig] = useState<any>(null);
+  const [providers, setProviders] = useState<any[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // New MCP form state
+  const [newMcpName, setNewMcpName] = useState('');
+  const [newMcpCommand, setNewMcpCommand] = useState('');
+  const [newMcpArgs, setNewMcpArgs] = useState('');
+  const [newMcpEnv, setNewMcpEnv] = useState('');
+
+  // New Pricing form state
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelInputPrice, setNewModelInputPrice] = useState('0.0');
+  const [newModelOutputPrice, setNewModelOutputPrice] = useState('0.0');
+
   useEffect(() => {
     api.get('/api/config').then(res => setConfig(res.data)).catch(console.error);
+    api.get('/api/providers').then(res => setProviders(res.data)).catch(console.error);
   }, []);
 
   const handleSave = async () => {
@@ -41,6 +54,66 @@ export default function Settings({ lang, setLang }: SettingsProps) {
 
   const handleRevert = () => {
     api.get('/api/config').then(res => setConfig(res.data)).catch(console.error);
+    api.get('/api/providers').then(res => setProviders(res.data)).catch(console.error);
+  };
+
+  const handleAddMcp = () => {
+    if (!newMcpName || !newMcpCommand) return;
+    const mcpServers = { ...(config.mcpServers || {}) };
+    const argsArray = newMcpArgs.trim() ? newMcpArgs.split(/\s+/) : [];
+    const envObj: Record<string, string> = {};
+    if (newMcpEnv.trim()) {
+      const parts = newMcpEnv.split(',');
+      parts.forEach(p => {
+        const [k, v] = p.split('=');
+        if (k && v) envObj[k.trim()] = v.trim();
+      });
+    }
+    mcpServers[newMcpName] = {
+      command: newMcpCommand,
+      args: argsArray,
+      env: Object.keys(envObj).length > 0 ? envObj : undefined
+    };
+    setConfig({ ...config, mcpServers });
+    setNewMcpName('');
+    setNewMcpCommand('');
+    setNewMcpArgs('');
+    setNewMcpEnv('');
+  };
+
+  const handleRemoveMcp = (name: string) => {
+    const mcpServers = { ...(config.mcpServers || {}) };
+    delete mcpServers[name];
+    setConfig({ ...config, mcpServers });
+  };
+
+  const handleAddPricing = () => {
+    if (!newModelId) return;
+    const modelPricing = { ...(config.modelPricing || {}) };
+    modelPricing[newModelId] = {
+      inputPrice: parseFloat(newModelInputPrice) || 0.0,
+      outputPrice: parseFloat(newModelOutputPrice) || 0.0
+    };
+    setConfig({ ...config, modelPricing });
+    setNewModelId('');
+    setNewModelInputPrice('0.0');
+    setNewModelOutputPrice('0.0');
+  };
+
+  const handleRemovePricing = (modelId: string) => {
+    const modelPricing = { ...(config.modelPricing || {}) };
+    delete modelPricing[modelId];
+    setConfig({ ...config, modelPricing });
+  };
+
+  const handleToggleFallback = (providerId: string) => {
+    let list = [...(config.fallbackProviderIds || [])];
+    if (list.includes(providerId)) {
+      list = list.filter(id => id !== providerId);
+    } else {
+      list.push(providerId);
+    }
+    setConfig({ ...config, fallbackProviderIds: list });
   };
 
   if (!config) return <div className="p-8 text-[var(--color-text-muted)] animate-pulse">{lang === 'en' ? 'Loading configuration...' : '正在加载配置...'}</div>;
@@ -183,6 +256,230 @@ export default function Settings({ lang, setLang }: SettingsProps) {
                 <span className="text-sm font-bold text-[var(--color-text-primary)] block">{t('settings.cache.enable', lang)}</span>
                 <p className="text-xs text-[var(--color-text-muted)] mt-1.5 max-w-2xl leading-relaxed">{t('settings.cache.desc', lang)}</p>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Disaster Recovery (Failover) Card */}
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-6 border-b border-[var(--color-border-base)] bg-[var(--color-bg-base)]/50">
+            <h3 className="text-lg font-bold">{t('settings.fallback', lang)}</h3>
+          </div>
+          
+          <div className="p-6 space-y-4">
+            <p className="text-xs text-[var(--color-text-muted)] max-w-2xl leading-relaxed">{t('settings.fallback.desc', lang)}</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              {providers.map(p => {
+                const isChecked = (config.fallbackProviderIds || []).includes(p.id);
+                const isActive = config.activeProviderId === p.id;
+                return (
+                  <div 
+                    key={p.id} 
+                    onClick={() => !isActive && handleToggleFallback(p.id)}
+                    className={`p-3 rounded-xl border flex items-center justify-between transition-colors select-none cursor-pointer ${
+                      isActive 
+                        ? 'border-[var(--color-border-base)] bg-[var(--color-bg-base)]/30 opacity-60' 
+                        : (isChecked ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/5' : 'border-[var(--color-border-base)] hover:border-[var(--color-primary)]/50')
+                    }`}
+                  >
+                    <div>
+                      <div className="text-xs font-bold">{p.name}</div>
+                      <div className="text-[10px] text-[var(--color-text-muted)] font-mono">{p.id}</div>
+                    </div>
+                    {isActive ? (
+                      <span className="text-[9px] bg-[var(--color-primary)]/10 text-[var(--color-primary)] px-1.5 py-0.5 rounded font-bold">{lang === 'en' ? 'Active' : '当前主节点'}</span>
+                    ) : (
+                      <input 
+                        type="checkbox" 
+                        checked={isChecked}
+                        readOnly
+                        className="rounded border-[var(--color-border-base)] text-[var(--color-primary)] focus:ring-[var(--color-primary)]" 
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Token Pricing Rates Card */}
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-6 border-b border-[var(--color-border-base)] bg-[var(--color-bg-base)]/50">
+            <h3 className="text-lg font-bold">{t('settings.pricing', lang)}</h3>
+          </div>
+          
+          <div className="p-6 space-y-4">
+            <p className="text-xs text-[var(--color-text-muted)] max-w-2xl leading-relaxed">{t('settings.pricing.desc', lang)}</p>
+            
+            <div className="border border-[var(--color-border-base)]/50 rounded-xl overflow-hidden">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[var(--color-bg-base)] text-[var(--color-text-muted)] font-bold border-b border-[var(--color-border-base)]">
+                  <tr>
+                    <th className="p-3">{lang === 'en' ? 'Model ID' : '模型 ID'}</th>
+                    <th className="p-3">{lang === 'en' ? 'Input ($ / M tokens)' : '输入单价 (USD / 百万)'}</th>
+                    <th className="p-3">{lang === 'en' ? 'Output ($ / M tokens)' : '输出单价 (USD / 百万)'}</th>
+                    <th className="p-3 w-16 text-center">{lang === 'en' ? 'Actions' : '操作'}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--color-border-base)]/40 font-medium">
+                  {Object.entries(config.modelPricing || {}).map(([modelId, rates]: any) => (
+                    <tr key={modelId} className="hover:bg-[var(--color-bg-hover)]/30 font-medium text-[var(--color-text-primary)]">
+                      <td className="p-3 font-mono">{modelId}</td>
+                      <td className="p-3">${rates.inputPrice.toFixed(2)}</td>
+                      <td className="p-3">${rates.outputPrice.toFixed(2)}</td>
+                      <td className="p-3 text-center">
+                        <button 
+                          onClick={() => handleRemovePricing(modelId)}
+                          className="text-red-500 hover:text-red-600 transition-colors font-bold text-[11px]"
+                        >
+                          {lang === 'en' ? 'Delete' : '删除'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {Object.keys(config.modelPricing || {}).length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="p-4 text-center text-[var(--color-text-muted)] italic">{lang === 'en' ? 'No custom pricing sheets' : '暂无自定义价格'}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Add new rate form */}
+            <div className="flex flex-wrap gap-3 items-end p-4 bg-[var(--color-bg-base)]/50 border border-[var(--color-border-base)]/50 rounded-xl">
+              <div className="flex-1 min-w-[150px]">
+                <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Model ID' : '模型 ID'}</label>
+                <input 
+                  type="text" 
+                  value={newModelId}
+                  onChange={e => setNewModelId(e.target.value)}
+                  placeholder="e.g. deepseek-chat"
+                  className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] font-mono text-[var(--color-text-primary)]"
+                />
+              </div>
+              <div className="w-24">
+                <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Input Rate' : '输入价格'}</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={newModelInputPrice}
+                  onChange={e => setNewModelInputPrice(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] text-[var(--color-text-primary)]"
+                />
+              </div>
+              <div className="w-24">
+                <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Output Rate' : '输出价格'}</label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  value={newModelOutputPrice}
+                  onChange={e => setNewModelOutputPrice(e.target.value)}
+                  className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] text-[var(--color-text-primary)]"
+                />
+              </div>
+              <button 
+                onClick={handleAddPricing}
+                className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+              >
+                {lang === 'en' ? 'Add Sheet' : '添加费率'}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* MCP Servers Card */}
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl overflow-hidden shadow-sm">
+          <div className="p-6 border-b border-[var(--color-border-base)] bg-[var(--color-bg-base)]/50">
+            <h3 className="text-lg font-bold">{t('settings.mcp', lang)}</h3>
+          </div>
+          
+          <div className="p-6 space-y-4">
+            <p className="text-xs text-[var(--color-text-muted)] max-w-2xl leading-relaxed">{t('settings.mcp.desc', lang)}</p>
+            
+            <div className="space-y-3">
+              {Object.entries(config.mcpServers || {}).map(([name, mcp]: any) => (
+                <div key={name} className="p-4 rounded-xl border border-[var(--color-border-base)] bg-[var(--color-bg-base)]/20 flex justify-between items-start">
+                  <div className="space-y-1">
+                    <div className="text-sm font-bold text-[var(--color-text-primary)]">{name}</div>
+                    <div className="text-xs text-[var(--color-text-secondary)]">
+                      <span className="font-semibold">{lang === 'en' ? 'Cmd:' : '命令:'}</span> <code className="font-mono bg-[var(--color-bg-base)] px-1.5 py-0.5 rounded text-[11px]">{mcp.command} {mcp.args?.join(' ')}</code>
+                    </div>
+                    {mcp.env && Object.keys(mcp.env).length > 0 && (
+                      <div className="text-[10px] text-[var(--color-text-muted)] font-mono">
+                        Env: {Object.entries(mcp.env).map(([k, v]) => `${k}=${v}`).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => handleRemoveMcp(name)}
+                    className="text-red-500 hover:text-red-600 transition-colors font-bold text-xs"
+                  >
+                    {lang === 'en' ? 'Remove' : '移除'}
+                  </button>
+                </div>
+              ))}
+              {Object.keys(config.mcpServers || {}).length === 0 && (
+                <div className="text-center p-6 bg-[var(--color-bg-base)]/30 border border-dashed border-[var(--color-border-base)]/80 rounded-xl text-xs text-[var(--color-text-muted)] italic">
+                  {lang === 'en' ? 'No MCP servers configured.' : '未配置任何 MCP 服务器。'}
+                </div>
+              )}
+            </div>
+
+            {/* Add MCP server form */}
+            <div className="p-4 bg-[var(--color-bg-base)]/50 border border-[var(--color-border-base)]/50 rounded-xl space-y-3">
+              <h4 className="text-xs font-bold text-[var(--color-text-primary)]">{lang === 'en' ? 'Add MCP Server node' : '新建 MCP 服务节点'}</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Unique Name' : '节点唯一标识'}</label>
+                  <input 
+                    type="text" 
+                    value={newMcpName}
+                    onChange={e => setNewMcpName(e.target.value)}
+                    placeholder="e.g. everything"
+                    className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] font-mono text-[var(--color-text-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Command' : '可执行文件命令'}</label>
+                  <input 
+                    type="text" 
+                    value={newMcpCommand}
+                    onChange={e => setNewMcpCommand(e.target.value)}
+                    placeholder="e.g. npx or node"
+                    className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] font-mono text-[var(--color-text-primary)]"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Arguments (Space separated)' : '启动参数 (空格分隔)'}</label>
+                  <input 
+                    type="text" 
+                    value={newMcpArgs}
+                    onChange={e => setNewMcpArgs(e.target.value)}
+                    placeholder="e.g. -y @modelcontextprotocol/server-everything"
+                    className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] font-mono text-[var(--color-text-primary)]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-[var(--color-text-muted)] mb-1">{lang === 'en' ? 'Env (Comma separated KEY=VAL)' : '环境变量 (逗号分隔 KEY=VAL)'}</label>
+                  <input 
+                    type="text" 
+                    value={newMcpEnv}
+                    onChange={e => setNewMcpEnv(e.target.value)}
+                    placeholder="e.g. API_KEY=abc,NODE_ENV=production"
+                    className="w-full px-3 py-1.5 bg-[var(--color-bg-input)] border border-[var(--color-border-base)] rounded-lg text-xs outline-none focus:border-[var(--color-primary)] font-mono text-[var(--color-text-primary)]"
+                  />
+                </div>
+              </div>
+              <button 
+                onClick={handleAddMcp}
+                className="px-4 py-2 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-lg text-xs font-bold transition-colors cursor-pointer"
+              >
+                {lang === 'en' ? 'Add MCP Server' : '添加 MCP 服务'}
+              </button>
             </div>
           </div>
         </div>

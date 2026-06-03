@@ -198,6 +198,9 @@ export interface RuntimeConfig {
   defaultMaxTokens?: number;
   autoSyncInterval?: string;
   cacheEnabled?: boolean;
+  fallbackProviderIds?: string[];
+  modelPricing?: Record<string, { inputPrice: number; outputPrice: number }>;
+  mcpServers?: Record<string, any>;
 }
 
 const _isPkg = !!(process as any).pkg;
@@ -224,6 +227,14 @@ function defaultConfig(): RuntimeConfig {
     defaultMaxTokens: 4096,
     autoSyncInterval: "never",
     cacheEnabled: true,
+    fallbackProviderIds: [],
+    modelPricing: {
+      "deepseek-chat": { inputPrice: 0.14, outputPrice: 0.28 },
+      "deepseek-reasoner": { inputPrice: 0.55, outputPrice: 2.19 },
+      "mimo-v2.5-pro": { inputPrice: 0.0, outputPrice: 0.0 },
+      "mimo-v2.5": { inputPrice: 0.0, outputPrice: 0.0 },
+    },
+    mcpServers: {},
   };
 }
 

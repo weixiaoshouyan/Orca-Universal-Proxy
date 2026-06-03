@@ -25,8 +25,8 @@ export default function Apps({ lang }: AppsProps) {
     api.get('/api/apps').then(res => {
       const mappedApps = res.data.map((app: any) => ({
         ...app,
-        icon: app.id === 'claude' || app.id.includes('desktop') ? Monitor : (app.id === 'cursor' || app.id === 'trae' || app.id === 'vscode' ? Code2 : Terminal),
-        color: app.id.includes('claude') ? 'bg-orange-500' : (app.id === 'cursor' ? 'bg-blue-600' : (app.id === 'trae' ? 'bg-indigo-500' : 'bg-green-500'))
+        icon: app.id === 'claude' || app.id.includes('desktop') ? Monitor : (app.id === 'cursor' || app.id === 'trae' || app.id === 'vscode' || app.id === 'cline' || app.id === 'roo-code' ? Code2 : Terminal),
+        color: app.id.includes('claude') ? 'bg-orange-500' : (app.id === 'cursor' ? 'bg-blue-600' : (app.id === 'trae' ? 'bg-indigo-500' : (app.id === 'cline' ? 'bg-amber-600' : (app.id === 'roo-code' ? 'bg-purple-600' : 'bg-green-500'))))
       }));
       setApps(mappedApps);
     }).catch(console.error);

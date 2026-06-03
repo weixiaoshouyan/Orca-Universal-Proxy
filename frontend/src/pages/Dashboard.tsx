@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Zap, Server, Key, Activity, ArrowUpRight } from 'lucide-react';
+import { Zap, Key, Activity, ArrowUpRight, Sparkles } from 'lucide-react';
 import { api } from '../api';
 import { translate as t } from '../i18n';
 import type { Language } from '../i18n';
@@ -9,7 +9,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ lang }: DashboardProps) {
-  const [stats, setStats] = useState<any>({ totalRequests: 0, interceptedRequests: 0, tokens: 0, totalTokens: 0 });
+  const [stats, setStats] = useState<any>({ totalRequests: 0, interceptedRequests: 0, tokens: 0, totalTokens: 0, totalCost: 0 });
 
   useEffect(() => {
     api.get('/api/stats').then(res => setStats(res.data)).catch(console.error);
@@ -23,7 +23,7 @@ export default function Dashboard({ lang }: DashboardProps) {
   const statCards = [
     { label: t('dashboard.stats.total', lang), value: (stats.totalRequests || 0).toLocaleString(), trend: '+0%', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
     { label: t('dashboard.stats.tokens', lang), value: (((stats.tokens || stats.totalTokens || 0) / 1000).toFixed(1)) + 'k', trend: '+0%', icon: Zap, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
-    { label: t('dashboard.stats.providers', lang), value: '3', trend: t('dashboard.stats.stable', lang), icon: Server, color: 'text-green-500', bg: 'bg-green-500/10' },
+    { label: lang === 'en' ? 'Estimated Cost' : '估算费用 (USD)', value: '$' + (stats.totalCost || 0).toFixed(4), trend: 'USD', icon: Sparkles, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
     { label: t('dashboard.stats.cache', lang), value: (stats.interceptedRequests || 0).toLocaleString(), trend: '0%', icon: Key, color: 'text-purple-500', bg: 'bg-purple-500/10' },
   ];
 

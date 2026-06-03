@@ -114,6 +114,20 @@ export const translations = {
     'logs.search': '搜索日志...',
     'logs.empty': '暂无日志记录',
     'logs.scroll': '锁定到底部',
+
+    // Agent, Fallbacks, MCP, Pricing
+    'chat.agentMode': '智能体模式 (Agent Mode)',
+    'chat.agentMode.desc': '激活智能体模式后，大模型可通过 MCP 或 Skill 执行本地脚本辅助您工作。',
+    'chat.skillSelect': '选择智能体技能 (Skill)',
+    'chat.skillSelect.none': '无技能 (常规对话)',
+    'chat.tools.executing': '智能体正在运行工具...',
+    'chat.tools.result': '执行结果',
+    'settings.mcp': 'MCP 智能体工具 (Model Context Protocol)',
+    'settings.mcp.desc': '配置本地或 stdio-based MCP 服务以在聊天框中激活智能体工具。',
+    'settings.fallback': '灾备与负载均衡 (Failover)',
+    'settings.fallback.desc': '选择并在当前提供商连接失败时的备用模型节点，系统会自动按顺序尝试。',
+    'settings.pricing': 'Token 费率估算设置 (Cost Estimator)',
+    'settings.pricing.desc': '设置各模型的输入与输出 Token 价格 (每百万个 Token，单位 USD) 用于财务开销估算。',
   },
   en: {
     // Sidebar
@@ -225,6 +239,20 @@ export const translations = {
     'logs.search': 'Search logs...',
     'logs.empty': 'No logs found',
     'logs.scroll': 'Lock to bottom',
+
+    // Agent, Fallbacks, MCP, Pricing
+    'chat.agentMode': 'Agent Mode',
+    'chat.agentMode.desc': 'Activate agent mode to allow the model to run custom scripts and MCP tools to solve tasks.',
+    'chat.skillSelect': 'Select Agent Skill',
+    'chat.skillSelect.none': 'No skill (Normal Chat)',
+    'chat.tools.executing': 'Agent running tool...',
+    'chat.tools.result': 'Execution Result',
+    'settings.mcp': 'Model Context Protocol (MCP) Tools',
+    'settings.mcp.desc': 'Configure stdio-based MCP servers to equip the agent with tools in the chat window.',
+    'settings.fallback': 'Disaster Recovery (Failover)',
+    'settings.fallback.desc': 'Choose backup model nodes. The system will automatically try them in sequence if the primary node fails.',
+    'settings.pricing': 'Token Cost Estimator',
+    'settings.pricing.desc': 'Configure rate cards per million tokens (USD) to track and estimate API costs.',
   }
 };
 
