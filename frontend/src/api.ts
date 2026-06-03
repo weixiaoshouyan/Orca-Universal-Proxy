@@ -12,7 +12,7 @@ export const api = axios.create({
   baseURL: 'http://127.0.0.1:18080',
   headers: {
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+    ...(token ? { 'x-local-token': token } : {})
   }
 });
 
@@ -23,7 +23,7 @@ export async function fetchEventSource(url: string, body: any, onMessage: (data:
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        ...(token ? { 'x-local-token': token } : {})
       },
       body: JSON.stringify(body)
     });
