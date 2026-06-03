@@ -542,7 +542,7 @@ export default function Chat({ lang }: { lang: Language }) {
                     {msg.content}
                   </div>
                 )}
-                {!isLoading && msg.role !== 'system' && i === activeChat.messages.length - 1 && (
+                {!isLoading && msg.role !== 'system' && i === (activeChat?.messages?.length || 0) - 1 && (
                   <div className={`flex mt-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <button 
                       onClick={(e) => {
@@ -581,9 +581,12 @@ export default function Chat({ lang }: { lang: Language }) {
             </div>
           )}
 
-          {/* Voice recording simulation overlay */}
           <div 
-            onClick={() => textareaRef.current?.focus()}
+            onClick={(e) => {
+              if (e.target !== textareaRef.current) {
+                textareaRef.current?.focus();
+              }
+            }}
             className="relative bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl shadow-sm focus-within:ring-2 focus-within:ring-[var(--color-primary)]/50 focus-within:border-[var(--color-primary)] transition-all flex flex-col overflow-hidden cursor-text"
           >
             
