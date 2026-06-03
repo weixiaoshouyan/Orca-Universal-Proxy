@@ -4,6 +4,9 @@ import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
 import os from "os";
+import dns from "dns";
+
+dns.setDefaultResultOrder("ipv4first");
 import { execSync, spawn } from "child_process";
 import {
   transformRequest,
@@ -60,7 +63,12 @@ const MAX_LOGS = 500;
 function log(level: string, ...args: unknown[]) {
   if ((LOG_LEVELS[level] ?? 1) < currentLevel) return;
   const ts = new Date().toISOString();
-  const message = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+  const message = args.map((a) => {
+    if (a instanceof Error) {
+      return a.stack || String(a);
+    }
+    return typeof a === "string" ? a : JSON.stringify(a);
+  }).join(" ");
   console.log(`[${ts}] [${level.toUpperCase()}]`, message);
   logBuffer.push({ time: ts, level, message });
   if (logBuffer.length > MAX_LOGS) logBuffer.shift();
