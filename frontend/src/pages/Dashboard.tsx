@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
 import { Zap, Server, Key, Activity, ArrowUpRight } from 'lucide-react';
 import { api } from '../api';
+import { translate as t } from '../i18n';
+import type { Language } from '../i18n';
 
-export default function Dashboard() {
-  const [stats, setStats] = useState({ totalRequests: 0, interceptedRequests: 0, tokens: 0 });
+interface DashboardProps {
+  lang: Language;
+}
+
+export default function Dashboard({ lang }: DashboardProps) {
+  const [stats, setStats] = useState<any>({ totalRequests: 0, interceptedRequests: 0, tokens: 0, totalTokens: 0 });
 
   useEffect(() => {
     api.get('/api/stats').then(res => setStats(res.data)).catch(console.error);
@@ -15,21 +21,21 @@ export default function Dashboard() {
   }, []);
 
   const statCards = [
-    { label: '总请求数', value: stats.totalRequests.toLocaleString(), trend: '+0%', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-    { label: '今日 Tokens', value: (stats.tokens / 1000).toFixed(1) + 'k', trend: '+0%', icon: Zap, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
-    { label: '活跃提供商', value: '3', trend: '稳定', icon: Server, color: 'text-green-500', bg: 'bg-green-500/10' },
-    { label: '拦截缓存', value: stats.interceptedRequests.toLocaleString(), trend: '0%', icon: Key, color: 'text-purple-500', bg: 'bg-purple-500/10' },
+    { label: t('dashboard.stats.total', lang), value: (stats.totalRequests || 0).toLocaleString(), trend: '+0%', icon: Activity, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+    { label: t('dashboard.stats.tokens', lang), value: (((stats.tokens || stats.totalTokens || 0) / 1000).toFixed(1)) + 'k', trend: '+0%', icon: Zap, color: 'text-yellow-500', bg: 'bg-yellow-500/10' },
+    { label: t('dashboard.stats.providers', lang), value: '3', trend: t('dashboard.stats.stable', lang), icon: Server, color: 'text-green-500', bg: 'bg-green-500/10' },
+    { label: t('dashboard.stats.cache', lang), value: (stats.interceptedRequests || 0).toLocaleString(), trend: '0%', icon: Key, color: 'text-purple-500', bg: 'bg-purple-500/10' },
   ];
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 ease-out">
       <div className="flex items-end justify-between mb-8">
         <div>
-          <h2 className="text-3xl font-bold tracking-tight text-[var(--color-text-primary)]">仪表盘</h2>
-          <p className="text-[14px] text-[var(--color-text-secondary)] mt-1.5">欢迎使用 Orca 智能网关，当前系统运行状态良好。</p>
+          <h2 className="text-3xl font-bold tracking-tight text-[var(--color-text-primary)]">{t('dashboard.title', lang)}</h2>
+          <p className="text-[14px] text-[var(--color-text-secondary)] mt-1.5">{t('dashboard.desc', lang)}</p>
         </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-[var(--color-primary)] text-white text-sm font-medium rounded-xl hover:bg-[var(--color-primary-hover)] shadow-lg shadow-[var(--color-primary)]/20 transition-all">
-          <ArrowUpRight className="w-4 h-4" /> 导出报告
+        <button className="flex items-center gap-2 px-4 py-2 bg-[var(--color-primary)] text-white text-sm font-medium rounded-xl hover:bg-[var(--color-primary-hover)] shadow-lg shadow-[var(--color-primary)]/20 transition-all cursor-pointer">
+          <ArrowUpRight className="w-4 h-4" /> {t('dashboard.export', lang)}
         </button>
       </div>
 
@@ -58,7 +64,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-6">
           <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-bold">流量趋势 (24h)</h3>
+            <h3 className="text-lg font-bold">{t('dashboard.chart.title', lang)}</h3>
             <div className="flex items-center gap-2 text-xs font-medium text-[var(--color-text-muted)]">
               <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500"></span> OpenAI</span>
               <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-500"></span> Anthropic</span>
@@ -75,9 +81,9 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-6 flex flex-col">
-          <h3 className="text-lg font-bold mb-4">最近拦截记录</h3>
+          <h3 className="text-lg font-bold mb-4">{t('dashboard.logs.title', lang)}</h3>
           <div className="flex-1 flex flex-col items-center justify-center text-[var(--color-text-muted)]">
-             <p className="text-sm">暂无拦截记录</p>
+             <p className="text-sm">{t('dashboard.logs.empty', lang)}</p>
           </div>
         </div>
       </div>

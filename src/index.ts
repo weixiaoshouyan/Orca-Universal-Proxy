@@ -3,6 +3,7 @@ import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
 import fs from "fs";
+import os from "os";
 import { execSync, spawn } from "child_process";
 import {
   transformRequest,
@@ -171,12 +172,20 @@ app.post("/api/config", (req, res) => {
     }
     if (updates.logLevel) current.logLevel = updates.logLevel;
     if (updates.modelOverrides) current.modelOverrides = { ...current.modelOverrides, ...updates.modelOverrides };
+    if (updates.routingRules) current.routingRules = updates.routingRules;
+    if (updates.discoveredModels) current.discoveredModels = updates.discoveredModels;
+    if (updates.language) current.language = updates.language;
+    if (updates.defaultTemperature !== undefined) current.defaultTemperature = Number(updates.defaultTemperature);
+    if (updates.defaultMaxTokens !== undefined) current.defaultMaxTokens = Number(updates.defaultMaxTokens);
+    if (updates.autoSyncInterval) current.autoSyncInterval = updates.autoSyncInterval;
+    if (updates.cacheEnabled !== undefined) current.cacheEnabled = Boolean(updates.cacheEnabled);
+    
     if (updates.providerKeys) {
       for (const [k, v] of Object.entries(updates.providerKeys)) {
         if (typeof v === "string") {
           if (v === "" || v === "__clear__") {
             delete current.providerKeys[k];
-          } else if (!v.includes("***")) {
+          } else if (!v.includes("***") && !v.includes("...") && !v.includes("*****") && !v.endsWith("...")) {
             current.providerKeys[k] = v;
           }
         }
@@ -185,6 +194,21 @@ app.post("/api/config", (req, res) => {
     saveConfig(current);
     res.json({ ok: true, message: "Config saved" });
   } catch (e) { res.status(400).json({ error: String(e) }); }
+});
+
+app.post("/api/theme", (req, res) => {
+  const { theme } = req.body;
+  try {
+    const current = loadConfig();
+    current.theme = theme;
+    saveConfig(current);
+  } catch (e) {
+    log("error", "Failed to save theme in config:", e);
+  }
+  if (process.send) {
+    process.send({ type: "theme", theme });
+  }
+  res.json({ ok: true });
 });
 
 app.post("/api/test-provider", async (req, res) => {
@@ -459,15 +483,45 @@ app.get("/api/discover-models/:providerId", async (req, res) => {
   const provider = getProvider(req.params.providerId);
   if (!provider) return res.status(404).json({ error: "Provider not found" });
   const apiKey = getApiKey(provider.id);
-  if (!apiKey) return res.status(400).json({ error: "API Key not configured" });
   try {
     const targetUrl = provider.baseUrl + "/v1/models";
-    const resp = await fetch(targetUrl, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
+    const headers: Record<string, string> = {};
+    if (provider.id === "anthropic") {
+      if (apiKey) {
+        headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01";
+      }
+    } else {
+      if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+    }
+    const resp = await fetch(targetUrl, { headers });
     if (!resp.ok) return res.status(resp.status).json({ error: await resp.text() });
     const data = await resp.json() as any;
-    const models = (data.data || []).map((m: any) => ({ id: m.id, name: m.id }));
+    
+    let rawModels: any[] = [];
+    if (Array.isArray(data)) {
+      rawModels = data;
+    } else if (data && Array.isArray(data.data)) {
+      rawModels = data.data;
+    } else if (data && Array.isArray(data.models)) {
+      rawModels = data.models;
+    } else if (data && typeof data === "object") {
+      // Robust scanning for any arrays (e.g. some wrapper response)
+      for (const val of Object.values(data)) {
+        if (Array.isArray(val)) {
+          rawModels = val;
+          break;
+        }
+      }
+    }
+    
+    const models = rawModels.map((m: any) => {
+      if (typeof m === "string") return { id: m, name: m };
+      const id = m.id || m.name || String(m);
+      const name = m.display_name || m.name || id;
+      return { id, name };
+    });
+    
     res.json({ provider: provider.id, models });
   } catch (e) {
     res.status(502).json({ error: String(e) });
@@ -615,16 +669,17 @@ function findExe(basePaths: string[], patterns: string[]) {
   return "";
 }
 
-function findInFolder(baseDir: string, exeName: string): string {
-  if (!baseDir || !fs.existsSync(baseDir)) return "";
+function findInFolder(baseDir: string, exeName: string, maxDepth: number = 2): string {
+  if (!baseDir || !fs.existsSync(baseDir) || maxDepth < 0) return "";
   try {
     const direct = baseDir + "\\" + exeName;
     if (fs.existsSync(direct)) return direct;
+    if (maxDepth === 0) return "";
     const entries = fs.readdirSync(baseDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
-        const nested = baseDir + "\\" + entry.name + "\\" + exeName;
-        if (fs.existsSync(nested)) return nested;
+        const found = findInFolder(baseDir + "\\" + entry.name, exeName, maxDepth - 1);
+        if (found) return found;
       }
     }
   } catch(e) {}
@@ -801,7 +856,7 @@ app.post("/api/apps/:id/launch", (req, res) => {
       // Codex CLI/Desktop 需要更新 config.toml 中的代理地址
       if (id.startsWith("codex")) {
         try {
-          const codexConfigPath = path.join(process.env.USERPROFILE || process.env.HOME || "", ".codex", "config.toml");
+          const codexConfigPath = path.join(os.homedir(), ".codex", "config.toml");
           if (fs.existsSync(codexConfigPath)) {
             let toml = fs.readFileSync(codexConfigPath, "utf-8");
             // Update [model_providers.OpenAI] base_url
@@ -829,7 +884,10 @@ app.post("/api/apps/:id/launch", (req, res) => {
       // Claude Desktop 需要通过配置文件设置代理
       if (id === "claude-desktop" || id === "claude") {
         try {
-          const claudeConfigPath = path.join(process.env.APPDATA || "", "Claude", "claude_desktop_config.json");
+          const isMac = process.platform === "darwin";
+          const claudeConfigPath = isMac 
+            ? path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json")
+            : path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
           let claudeConfig: any = {};
           try { claudeConfig = JSON.parse(fs.readFileSync(claudeConfigPath, "utf-8")); } catch {}
           claudeConfig.proxy = { url: proxyUrl };
@@ -843,7 +901,7 @@ app.post("/api/apps/:id/launch", (req, res) => {
       // Codex Desktop 需要更新 config.toml
       if (id.startsWith("codex")) {
         try {
-          const codexConfigPath = path.join(process.env.USERPROFILE || process.env.HOME || "", ".codex", "config.toml");
+          const codexConfigPath = path.join(os.homedir(), ".codex", "config.toml");
           if (fs.existsSync(codexConfigPath)) {
             let toml = fs.readFileSync(codexConfigPath, "utf-8");
             toml = toml.replace(

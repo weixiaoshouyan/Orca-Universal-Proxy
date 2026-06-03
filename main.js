@@ -26,6 +26,17 @@ function getPort() {
   return 18080;
 }
 
+function getTheme() {
+  try {
+    const configPath = path.join(app.getPath('userData'), 'data', 'config.json');
+    if (fs.existsSync(configPath)) {
+      const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+      return cfg.theme || 'dark';
+    }
+  } catch (e) {}
+  return 'dark';
+}
+
 function startServer() {
   return new Promise((resolve, reject) => {
     const bundlePath = path.join(__dirname, 'dist', 'bundle.js');
@@ -45,9 +56,15 @@ function startServer() {
       // Also copy public directory
       const tmpPublic = path.join(tmpDir, 'public');
       if (!fs.existsSync(tmpPublic)) fs.mkdirSync(tmpPublic, { recursive: true });
-      const htmlSrc = path.join(__dirname, 'public', 'index.html');
-      if (fs.existsSync(htmlSrc)) {
-        fs.copyFileSync(htmlSrc, path.join(tmpPublic, 'index.html'));
+      const srcPublic = path.join(__dirname, 'public');
+      if (fs.existsSync(srcPublic)) {
+        const files = fs.readdirSync(srcPublic);
+        for (const file of files) {
+          const stat = fs.statSync(path.join(srcPublic, file));
+          if (stat.isFile()) {
+            fs.copyFileSync(path.join(srcPublic, file), path.join(tmpPublic, file));
+          }
+        }
       }
       serverScript = tmpBundle;
     }
@@ -60,6 +77,31 @@ function startServer() {
     serverProcess = fork(serverScript, [], {
       env: { ...process.env, ORCA_BASE_DIR: app.getPath('userData'), LOCAL_AUTH_TOKEN },
       silent: true
+    });
+
+    serverProcess.on('message', (msg) => {
+      console.log('[Main] IPC Message from server:', msg);
+      if (msg && msg.type === 'theme' && mainWindow) {
+        console.log('[Main] Applying theme overlay:', msg.theme);
+        try {
+          if (msg.theme === 'dark') {
+            mainWindow.setTitleBarOverlay({
+              color: '#0b0d14',
+              symbolColor: '#6b7094',
+              height: 38
+            });
+          } else {
+            mainWindow.setTitleBarOverlay({
+              color: '#f8fafc',
+              symbolColor: '#475569',
+              height: 38
+            });
+          }
+          console.log('[Main] Theme overlay updated successfully.');
+        } catch (e) {
+          console.error('[Main] Failed to update title bar overlay:', e);
+        }
+      }
     });
 
     serverProcess.stdout.on('data', (data) => {
@@ -94,6 +136,8 @@ function startServer() {
 }
 
 function createWindow() {
+  const theme = getTheme();
+  console.log('[Main] Initializing window with theme overlay:', theme);
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -104,8 +148,8 @@ function createWindow() {
     show: false,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#0b0d14',
-      symbolColor: '#6b7094',
+      color: theme === 'light' ? '#f8fafc' : '#0b0d14',
+      symbolColor: theme === 'light' ? '#475569' : '#6b7094',
       height: 38
     },
     webPreferences: {
@@ -148,7 +192,7 @@ function getIconPath() {
   const iconPaths = [
     path.join(__dirname, 'assets', 'icon.ico'),
     path.join(__dirname, 'assets', 'icon.png'),
-    path.join(__dirname, 'public', 'favicon.ico')
+    path.join(__dirname, 'public', 'favicon.svg')
   ];
   for (const p of iconPaths) {
     if (fs.existsSync(p)) return p;
@@ -274,7 +318,8 @@ function copyDataFiles() {
       customProviders: [],
       modelOverrides: {},
       port: 18080,
-      logLevel: 'info'
+      logLevel: 'info',
+      theme: 'dark'
     };
     fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2));
   }

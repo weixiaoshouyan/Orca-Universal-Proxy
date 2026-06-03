@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { api } from './api';
 import { LayoutDashboard, MessageSquare, MonitorPlay, Box, Settings, Activity, Sun, Moon } from 'lucide-react';
+import { translate as t, getLanguage } from './i18n';
+import type { Language } from './i18n';
 
 import Dashboard from './pages/Dashboard';
 import Chat from './pages/Chat';
@@ -9,14 +12,14 @@ import Providers from './pages/Providers';
 import SettingsPage from './pages/Settings';
 import Logs from './pages/Logs';
 
-function Sidebar({ isDark, toggleTheme }: { isDark: boolean, toggleTheme: () => void }) {
+function Sidebar({ isDark, toggleTheme, lang }: { isDark: boolean, toggleTheme: () => void, lang: Language }) {
   const navItems = [
-    { name: '仪表盘', path: '/dashboard', icon: LayoutDashboard },
-    { name: '聊天', path: '/chat', icon: MessageSquare },
-    { name: '应用管理', path: '/apps', icon: MonitorPlay },
-    { name: '模型提供商', path: '/providers', icon: Box },
-    { name: '设置', path: '/settings', icon: Settings },
-    { name: '请求日志', path: '/logs', icon: Activity },
+    { name: t('menu.dashboard', lang), path: '/dashboard', icon: LayoutDashboard },
+    { name: t('menu.chat', lang), path: '/chat', icon: MessageSquare },
+    { name: t('menu.apps', lang), path: '/apps', icon: MonitorPlay },
+    { name: t('menu.providers', lang), path: '/providers', icon: Box },
+    { name: t('menu.settings', lang), path: '/settings', icon: Settings },
+    { name: t('menu.logs', lang), path: '/logs', icon: Activity },
   ];
 
   return (
@@ -58,7 +61,7 @@ function Sidebar({ isDark, toggleTheme }: { isDark: boolean, toggleTheme: () => 
         >
           <div className="flex items-center gap-3">
             {isDark ? <Moon className="w-[18px] h-[18px]" /> : <Sun className="w-[18px] h-[18px]" />}
-            <span>外观模式</span>
+            <span>{t('sidebar.appearance', lang)}</span>
           </div>
           <div className="text-[11px] font-bold uppercase tracking-wider text-[var(--color-text-muted)] bg-[var(--color-bg-base)] px-2 py-0.5 rounded-md border border-[var(--color-border-base)]">
             {isDark ? 'DARK' : 'LIGHT'}
@@ -67,7 +70,7 @@ function Sidebar({ isDark, toggleTheme }: { isDark: boolean, toggleTheme: () => 
 
         <div className="px-3 py-2 flex items-center gap-2.5 rounded-xl bg-[var(--color-bg-base)] border border-[var(--color-border-base)]">
           <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)] animate-pulse"></span>
-          <span className="text-xs font-semibold text-green-600 dark:text-green-400">服务运行中</span>
+          <span className="text-xs font-semibold text-green-600 dark:text-green-400">{t('sidebar.running', lang)}</span>
         </div>
       </div>
     </div>
@@ -80,29 +83,45 @@ function App() {
     return saved ? saved === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
+  const [lang, setLang] = useState<Language>(getLanguage);
+
   useEffect(() => {
     if (isDark) {
       document.documentElement.classList.add('dark');
       localStorage.setItem('theme', 'dark');
+      api.post('/api/theme', { theme: 'dark' }).catch(() => {});
     } else {
       document.documentElement.classList.remove('dark');
       localStorage.setItem('theme', 'light');
+      api.post('/api/theme', { theme: 'light' }).catch(() => {});
     }
   }, [isDark]);
+
+  useEffect(() => {
+    api.get('/api/config').then(res => {
+      if (res.data && res.data.language) {
+        const backendLang = res.data.language;
+        if (backendLang === 'en' || backendLang === 'zh') {
+          setLang(backendLang);
+          localStorage.setItem('language', backendLang);
+        }
+      }
+    }).catch(console.error);
+  }, []);
 
   return (
     <HashRouter>
       <div className="flex min-h-screen bg-[var(--color-bg-base)] transition-colors duration-300">
-        <Sidebar isDark={isDark} toggleTheme={() => setIsDark(!isDark)} />
+        <Sidebar isDark={isDark} toggleTheme={() => setIsDark(!isDark)} lang={lang} />
         <main className="ml-[240px] flex-1 px-10 py-8 text-[var(--color-text-primary)] min-h-screen max-w-7xl mx-auto">
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Dashboard />} />
-            <Route path="/chat" element={<Chat />} />
-            <Route path="/apps" element={<Apps />} />
-            <Route path="/providers" element={<Providers />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/logs" element={<Logs />} />
+            <Route path="/dashboard" element={<Dashboard lang={lang} />} />
+            <Route path="/chat" element={<Chat lang={lang} />} />
+            <Route path="/apps" element={<Apps lang={lang} />} />
+            <Route path="/providers" element={<Providers lang={lang} />} />
+            <Route path="/settings" element={<SettingsPage lang={lang} setLang={setLang} />} />
+            <Route path="/logs" element={<Logs lang={lang} />} />
           </Routes>
         </main>
       </div>

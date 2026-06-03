@@ -30,10 +30,8 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     openaiCompatible: true,
     description: "\u6DF1\u5EA6\u6C42\u7D22 - \u9AD8\u6027\u4EF7\u6BD4\u63A8\u7406\u6A21\u578B",
     models: [
-      { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
-      { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
-      { id: "deepseek-chat", name: "DeepSeek Chat (legacy)" },
-      { id: "deepseek-reasoner", name: "DeepSeek Reasoner (legacy)", reasoning: true },
+      { id: "deepseek-chat", name: "DeepSeek Chat" },
+      { id: "deepseek-reasoner", name: "DeepSeek Reasoner", reasoning: true },
     ],
   },
   {
@@ -191,8 +189,15 @@ export interface RuntimeConfig {
   customProviders: Provider[];
   modelOverrides: Record<string, string>;
   routingRules: { pattern: string; providerId: string }[];
+  discoveredModels?: Record<string, ProviderModel[]>;
   port: number;
   logLevel: string;
+  theme?: string;
+  language?: string;
+  defaultTemperature?: number;
+  defaultMaxTokens?: number;
+  autoSyncInterval?: string;
+  cacheEnabled?: boolean;
 }
 
 const _isPkg = !!(process as any).pkg;
@@ -210,8 +215,15 @@ function defaultConfig(): RuntimeConfig {
     customProviders: [],
     modelOverrides: {},
     routingRules: [],
+    discoveredModels: {},
     port: 18080,
     logLevel: "info",
+    theme: "dark",
+    language: "zh",
+    defaultTemperature: 0.7,
+    defaultMaxTokens: 4096,
+    autoSyncInterval: "never",
+    cacheEnabled: true,
   };
 }
 
@@ -248,7 +260,13 @@ export function saveConfig(cfg: RuntimeConfig): void {
 
 export function getAllProviders(): Provider[] {
   const cfg = loadConfig();
-  return [...BUILTIN_PROVIDERS, ...cfg.customProviders];
+  const discovered = cfg.discoveredModels || {};
+  return [...BUILTIN_PROVIDERS, ...cfg.customProviders].map((p) => {
+    if (discovered[p.id] && discovered[p.id].length > 0) {
+      return { ...p, models: discovered[p.id] };
+    }
+    return p;
+  });
 }
 
 export function getProvider(id: string): Provider | undefined {
@@ -323,7 +341,7 @@ export function resolveModel(requested: string): { provider: Provider; model: st
   // 4. Fall back to active provider, map model to its first model if not native
   if (activeKey) {
     const isNative = active.models.some(m => m.id === requested);
-    const finalModel = isNative ? requested : (active.models[0]?.id || requested);
+    const finalModel = isNative ? requested : (active.models.length > 0 ? active.models[0].id : requested);
     return { provider: active, model: finalModel, apiKey: activeKey };
   }
 
