@@ -122,7 +122,7 @@ app.use((req, _res, next) => {
 // ---- Local Token Authentication ----
 app.use((req, res, next) => {
   if (!process.env.LOCAL_AUTH_TOKEN) return next();
-  if (req.url.startsWith("/v1/") || req.url.startsWith("/api/")) {
+  if (req.url.startsWith("/api/")) {
     // Permit OPTIONS requests
     if (req.method === "OPTIONS") return next();
     const token = req.headers["x-local-token"] || req.query.token;
