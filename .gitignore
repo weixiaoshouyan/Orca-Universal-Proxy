@@ -9,6 +9,4 @@ __pycache__/
 Thumbs.db
 .idea/
 .vscode/
-err.log
-out.log
-server.log
+*.log
