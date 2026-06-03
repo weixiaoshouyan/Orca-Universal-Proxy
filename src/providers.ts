@@ -30,8 +30,10 @@ export const BUILTIN_PROVIDERS: Provider[] = [
     openaiCompatible: true,
     description: "\u6DF1\u5EA6\u6C42\u7D22 - \u9AD8\u6027\u4EF7\u6BD4\u63A8\u7406\u6A21\u578B",
     models: [
-      { id: "deepseek-chat", name: "DeepSeek Chat" },
-      { id: "deepseek-reasoner", name: "DeepSeek Reasoner", reasoning: true },
+      { id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" },
+      { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" },
+      { id: "deepseek-chat", name: "DeepSeek Chat (legacy)" },
+      { id: "deepseek-reasoner", name: "DeepSeek Reasoner (legacy)", reasoning: true },
     ],
   },
   {
@@ -128,10 +130,24 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   {
     id: "xiaomi",
     name: "\u5c0f\u7c73 MiMo",
-    baseUrl: "https://token-plan-cn.xiaomimimo.com",
+    baseUrl: "https://api.xiaomimimo.com",
     apiKeyEnv: "XIAOMI_API_KEY",
     openaiCompatible: true,
-    description: "\u5c0f\u7c73 TokenPlan MiMo \u5927\u6a21\u578b",
+    description: "\u5c0f\u7c73 MiMo \u5927\u6a21\u578b (\u666e\u901a API)",
+    models: [
+      { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", reasoning: true },
+      { id: "mimo-v2.5", name: "MiMo V2.5" },
+      { id: "mimo-v2-pro", name: "MiMo V2 Pro", reasoning: true },
+      { id: "mimo-v2-omni", name: "MiMo V2 Omni" },
+    ],
+  },
+  {
+    id: "xiaomi-tokenplan",
+    name: "\u5c0f\u7c73 TokenPlan",
+    baseUrl: "https://token-plan-cn.xiaomimimo.com",
+    apiKeyEnv: "XIAOMI_TOKENPLAN_API_KEY",
+    openaiCompatible: true,
+    description: "\u5c0f\u7c73 TokenPlan (\u514d\u8d39\u8bd5\u7528/\u9650\u65f6\u6d41\u91cf)",
     models: [
       { id: "mimo-v2.5-pro", name: "MiMo V2.5 Pro", reasoning: true },
       { id: "mimo-v2.5", name: "MiMo V2.5" },
@@ -174,11 +190,18 @@ export interface RuntimeConfig {
   providerKeys: Record<string, string>;
   customProviders: Provider[];
   modelOverrides: Record<string, string>;
+  routingRules: { pattern: string; providerId: string }[];
   port: number;
   logLevel: string;
 }
 
-const CONFIG_PATH = path.join(__dirname, "..", "data", "config.json");
+const _isPkg = !!(process as any).pkg;
+const _isSEA = typeof (process as any).isSea !== "undefined" && (process as any).isSea;
+const _isElectron = !!process.env.ORCA_BASE_DIR;
+const _devDir = path.join(__dirname, "..");
+const _portableDir = __dirname;
+const BASE_DIR = _isElectron ? process.env.ORCA_BASE_DIR! : ((_isPkg || _isSEA) ? path.dirname(process.execPath) : (fs.existsSync(path.join(_portableDir, "public")) ? _portableDir : _devDir));
+const CONFIG_PATH = path.join(BASE_DIR, "data", "config.json");
 
 function defaultConfig(): RuntimeConfig {
   return {
@@ -186,7 +209,8 @@ function defaultConfig(): RuntimeConfig {
     providerKeys: {},
     customProviders: [],
     modelOverrides: {},
-    port: 3000,
+    routingRules: [],
+    port: 18080,
     logLevel: "info",
   };
 }
@@ -208,9 +232,6 @@ export function loadConfig(): RuntimeConfig {
         _config.providerKeys[p.id] = process.env[p.apiKeyEnv]!;
       }
     }
-  }
-  if (process.env.DEEPSEEK_API_KEY && !_config.providerKeys["deepseek"]) {
-    _config.providerKeys["deepseek"] = process.env.DEEPSEEK_API_KEY;
   }
   return _config;
 }
@@ -246,12 +267,49 @@ export function getApiKey(providerId: string): string {
 
 export function resolveModel(requested: string): { provider: Provider; model: string; apiKey: string } {
   const cfg = loadConfig();
+
+  // 1. Check model overrides first
   if (cfg.modelOverrides[requested]) {
     const mapped = cfg.modelOverrides[requested];
     const [provId, modelId] = mapped.includes("/") ? mapped.split("/", 2) : [cfg.activeProviderId, mapped];
     const prov = getProvider(provId) || getActiveProvider();
     return { provider: prov, model: modelId, apiKey: getApiKey(prov.id) };
   }
+
+  // 1.5. Check routing rules
+  if (cfg.routingRules && cfg.routingRules.length > 0) {
+    for (const rule of cfg.routingRules) {
+      try {
+        const regex = new RegExp(rule.pattern);
+        if (regex.test(requested)) {
+          const prov = getProvider(rule.providerId);
+          if (prov) {
+            const key = getApiKey(prov.id);
+            if (key) {
+              const isNative = prov.models.some(m => m.id === requested);
+              const finalModel = isNative ? requested : (prov.models[0]?.id || requested);
+              return { provider: prov, model: finalModel, apiKey: key };
+            }
+          }
+        }
+      } catch (e) {
+        // ignore invalid regex
+      }
+    }
+  }
+
+  // 2. Check active provider first (highest priority for matching models)
+  const active = getActiveProvider();
+  const activeKey = getApiKey(active.id);
+  if (activeKey) {
+    for (const m of active.models) {
+      if (m.id === requested) {
+        return { provider: active, model: requested, apiKey: activeKey };
+      }
+    }
+  }
+
+  // 3. Check all other configured providers
   for (const prov of getAllProviders()) {
     if (prov.id === cfg.activeProviderId) continue;
     if (!getApiKey(prov.id)) continue;
@@ -261,8 +319,14 @@ export function resolveModel(requested: string): { provider: Provider; model: st
       }
     }
   }
-  const active = getActiveProvider();
-  const isNative = active.models.some(m => m.id === requested);
-  const finalModel = isNative ? requested : (active.models[0]?.id || requested);
-  return { provider: active, model: finalModel, apiKey: getApiKey(active.id) };
+
+  // 4. Fall back to active provider, map model to its first model if not native
+  if (activeKey) {
+    const isNative = active.models.some(m => m.id === requested);
+    const finalModel = isNative ? requested : (active.models[0]?.id || requested);
+    return { provider: active, model: finalModel, apiKey: activeKey };
+  }
+
+  // 5. No provider available at all
+  return { provider: active, model: requested, apiKey: "" };
 }

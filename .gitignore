@@ -2,9 +2,13 @@ node_modules/
 dist/
 .env
 data/config.json
+release/
 __pycache__/
 *.py[cod]
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+err.log
+out.log
+server.log

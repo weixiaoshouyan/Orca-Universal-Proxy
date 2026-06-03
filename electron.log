@@ -1,0 +1,83 @@
+
+[Server] [2026-06-02T16:44:23.006Z] [INFO] ===========================================
+[2026-06-02T16:44:23.007Z] [INFO]   Orca Universal Proxy v2.1.0
+[2026-06-02T16:44:23.007Z] [INFO]   Listening on http://127.0.0.1:18080
+
+Server started successfully
+[Server] [2026-06-02T16:44:23.007Z] [INFO]   Active provider: 小米 TokenPlan (https://token-plan-cn.xiaomimimo.com)
+[2026-06-02T16:44:23.007Z] [INFO]   Log level: info
+[2026-06-02T16:44:23.007Z] [INFO] ===========================================
+[2026-06-02T16:44:23.007Z] [INFO] 
+[2026-06-02T16:44:23.007Z] [INFO]   Dashboard: http://127.0.0.1:18080
+[2026-06-02T16:44:23.007Z] [INFO] 
+[2026-06-02T16:44:23.007Z] [INFO]   Codex CLI:
+[2026-06-02T16:44:23.007Z] [INFO]     $env:OPENAI_BASE_URL = "http://127.0.0.1:18080/v1"
+[2026-06-02T16:44:23.007Z] [INFO]     $env:OPENAI_API_KEY = "sk-dummy"
+[2026-06-02T16:44:23.007Z] [INFO] 
+[2026-06-02T16:44:23.007Z] [INFO]   Claude Desktop:
+[2026-06-02T16:44:23.007Z] [INFO]     Set proxy in claude_desktop_config.json to http://127.0.0.1:18080
+[2026-06-02T16:44:23.007Z] [INFO] 
+
+[Server] [2026-06-02T16:44:23.153Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:25.266Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:25.266Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:25.886Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:26.157Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:27.500Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:27.500Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:28.165Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:29.166Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:32.164Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:32.850Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:32.851Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:33.153Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:33.477Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:33.477Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:35.166Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:36.171Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:36.171Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:36.657Z] [INFO] GET /api/providers from 127.0.0.1
+
+[Server] [2026-06-02T16:44:36.657Z] [INFO] GET /api/config from 127.0.0.1
+
+[Server] [2026-06-02T16:44:37.393Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:38.166Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:38.166Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:41.769Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:43.767Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:44.765Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:47.766Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:48.765Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:50.766Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+[Server] [2026-06-02T16:44:53.772Z] [INFO] GET /api/status from 127.0.0.1
+
+[Server] [2026-06-02T16:44:53.772Z] [INFO] GET /api/logs?limit=200 from 127.0.0.1
+
+Server process exited with code: null

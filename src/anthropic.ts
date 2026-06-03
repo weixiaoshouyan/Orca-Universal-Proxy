@@ -1,12 +1,11 @@
-// ============================================================
+﻿// ============================================================
 // src/anthropic.ts
-// Anthropic Messages API <-> OpenAI Chat Completions ת��
-// ���ڴ��� Claude �����
-// ============================================================
+// Anthropic Messages API <-> OpenAI Chat Completions 转锟斤拷
+// 锟斤拷锟节达拷锟斤拷 Claude 锟斤拷锟斤拷锟?// ============================================================
 
 import { randomUUID } from "crypto";
 
-// ---- Anthropic ���Ͷ��� ----------------------------------------------------
+// ---- Anthropic 锟斤拷锟酵讹拷锟斤拷 ----------------------------------------------------
 
 export interface AnthropicRequest {
   model: string;
@@ -44,7 +43,7 @@ interface AnthropicTool {
   input_schema: Record<string, unknown>;
 }
 
-// ---- ת��: Anthropic Request -> OpenAI Chat Request ------------------------
+// ---- 转锟斤拷: Anthropic Request -> OpenAI Chat Request ------------------------
 
 export interface OpenAIChatRequest {
   model: string;
@@ -109,7 +108,7 @@ export function transformAnthropicRequest(body: AnthropicRequest): OpenAIChatReq
           role: "assistant",
           content: null,
           tool_calls: [{
-            id: block.id || `call_${randomUUID().slice(0, 8)}`,
+            id: block.id || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
             type: "function",
             function: {
               name: block.name || "",
@@ -157,7 +156,7 @@ export function transformAnthropicRequest(body: AnthropicRequest): OpenAIChatReq
   return req;
 }
 
-// ---- ��ʽ��Ӧת��: OpenAI SSE -> Anthropic SSE ----------------------------
+// ---- 锟斤拷式锟斤拷应转锟斤拷: OpenAI SSE -> Anthropic SSE ----------------------------
 
 export interface AnthropicStreamState {
   messageId: string;
@@ -237,8 +236,8 @@ export function processAnthropicChunk(
     state.stopReason = finishReason === "tool_calls" ? "tool_use" : "end_turn";
   }
 
-  // Text content
-  const content = delta.content as string | undefined;
+  // Text content (also handle DeepSeek reasoning_content)
+  const content = (delta.content || delta.reasoning_content) as string | undefined;
   if (content) {
     if (state.fullText.length === 0 && state.toolCalls.size === 0) {
       // Start a text content block
@@ -344,4 +343,123 @@ export function formatAnthropicError(statusCode: number, message: string): strin
       message,
     },
   });
+}
+// ============================================================
+// Anthropic SSE 鈫?OpenAI SSE conversion
+// Used by /v1/chat/completions when target is Anthropic
+// ============================================================
+
+export interface AnthropicToOpenAIState {
+  chatId: string;
+  model: string;
+  role: string;
+  started: boolean;
+  contentBlockType: string | null;
+  finishReason: string | null;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export function createAnthropicToOpenAIState(model: string): AnthropicToOpenAIState {
+  return {
+    chatId: 'chatcmpl-' + randomUUID().replace(/-/g, '').slice(0, 24),
+    model,
+    role: 'assistant',
+    started: false,
+    contentBlockType: null,
+    finishReason: null,
+    inputTokens: 0,
+    outputTokens: 0,
+  };
+}
+
+function openaiSse(data: unknown): string {
+  return 'data: ' + JSON.stringify(data) + '\n\n';
+}
+
+export function processAnthropicToOpenAIChunk(
+  state: AnthropicToOpenAIState,
+  chunk: Record<string, unknown>
+): string {
+  const chunkType = chunk.type as string;
+  if (!chunkType) return '';
+
+  let out = '';
+  const now = Math.floor(Date.now() / 1000);
+
+  switch (chunkType) {
+    case 'message_start': {
+      const msg = (chunk.message || {}) as Record<string, unknown>;
+      const usage = (msg.usage || {}) as Record<string, unknown>;
+      if (usage.input_tokens) state.inputTokens = usage.input_tokens as number;
+      state.started = true;
+      out += openaiSse({
+        id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+        choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+      });
+      break;
+    }
+    case 'content_block_start': {
+      const cb = (chunk.content_block || {}) as Record<string, unknown>;
+      state.contentBlockType = cb.type as string || 'text';
+      break;
+    }
+    case 'content_block_delta': {
+      const delta = (chunk.delta || {}) as Record<string, unknown>;
+      if (delta.type === 'text_delta' && delta.text) {
+        out += openaiSse({
+          id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+          choices: [{ index: 0, delta: { content: delta.text }, finish_reason: null }],
+        });
+      } else if (delta.type === 'input_json_delta' && delta.partial_json) {
+        // Tool use input JSON delta - not directly representable in OpenAI chunk format
+        // We could emit as content for debugging, but best to skip
+      }
+      break;
+    }
+    case 'content_block_stop': {
+      state.contentBlockType = null;
+      break;
+    }
+    case 'message_delta': {
+      const delta = (chunk.delta || {}) as Record<string, unknown>;
+      if (delta.stop_reason) {
+        const sr = delta.stop_reason as string;
+        state.finishReason = sr === 'end_turn' ? 'stop' : (sr === 'tool_use' ? 'tool_calls' : sr);
+      }
+      const usage = (chunk.usage || {}) as Record<string, unknown>;
+      if (usage.output_tokens) state.outputTokens = usage.output_tokens as number;
+      break;
+    }
+    case 'message_stop': {
+      // Final event - emit finish chunk
+      out += openaiSse({
+        id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+        choices: [{ index: 0, delta: {}, finish_reason: state.finishReason || 'stop' }],
+      });
+      out += openaiSse({
+        id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+        choices: [],
+        usage: { prompt_tokens: state.inputTokens, completion_tokens: state.outputTokens, total_tokens: state.inputTokens + state.outputTokens },
+      });
+      out += 'data: [DONE]\n\n';
+      break;
+    }
+    case 'ping':
+    case 'error':
+      break;
+  }
+  return out;
+}
+
+export function generateAnthropicToOpenAIEndEvents(state: AnthropicToOpenAIState): string {
+  if (state.finishReason) return ''; // already emitted in message_stop
+  const now = Math.floor(Date.now() / 1000);
+  let out = '';
+  out += openaiSse({
+    id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+    choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+  });
+  out += 'data: [DONE]\n\n';
+  return out;
 }

@@ -121,7 +121,7 @@ function convertInputItem(item: InputItem): ChatMessage | ChatMessage[] | null {
       role: "assistant",
       content: null as unknown as string,
       tool_calls: [{
-        id: item.call_id || `call_${randomUUID().slice(0, 8)}`,
+        id: item.call_id || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
         type: "function",
         function: { name: item.name || "", arguments: item.arguments || "{}" },
       }],
@@ -130,7 +130,12 @@ function convertInputItem(item: InputItem): ChatMessage | ChatMessage[] | null {
 
   const role = item.role;
   if (role === "user" || role === "assistant" || role === "system" || role === "developer") {
-    return { role: mapRole(role), content: extractTextContent(item.content) };
+    const msg: ChatMessage = { role: mapRole(role), content: extractTextContent(item.content) };
+    // Preserve reasoning_content for DeepSeek reasoning models
+    if ((item as any).reasoning_content) {
+      (msg as any).reasoning_content = (item as any).reasoning_content;
+    }
+    return msg;
   }
 
   if (item.type === "message") {
@@ -192,6 +197,7 @@ export interface StreamState {
   itemId: string;
   model: string;
   fullText: string;
+  reasoningContent: string;
   started: boolean;
   toolCalls: Map<number, { id: string; name: string; arguments: string }>;
   finishReason: string | null;
@@ -204,6 +210,7 @@ export function createStreamState(model: string): StreamState {
     itemId: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
     model,
     fullText: "",
+    reasoningContent: "",
     started: false,
     toolCalls: new Map(),
     finishReason: null,
@@ -255,7 +262,13 @@ export function processChunk(state: StreamState, chunk: Record<string, unknown>)
 
   if (!state.started) out += generateStartEvents(state);
 
-  const content = delta.content as string | undefined;
+  // Track reasoning_content separately for DeepSeek
+  const reasoningContent = delta.reasoning_content as string | undefined;
+  if (reasoningContent) {
+    state.reasoningContent += reasoningContent;
+  }
+
+  const content = (delta.content || delta.reasoning_content) as string | undefined;
   if (content) {
     state.fullText += content;
     out += sse("response.output_text.delta", {
@@ -325,7 +338,8 @@ export function generateEndEvents(state: StreamState): string {
         call_id: tc.id, name: tc.name, arguments: tc.arguments, status: "completed",
       }))
     : [{ type: "message", id: state.itemId, role: "assistant", status: "completed",
-        content: [{ type: "output_text", text: state.fullText }] }];
+        content: [{ type: "output_text", text: state.fullText }],
+        ...(state.reasoningContent ? { reasoning_content: state.reasoningContent } : {}) }];
 
   out += sse("response.completed", {
     type: "response.completed",
