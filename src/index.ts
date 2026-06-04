@@ -175,7 +175,7 @@ app.get("/api/config", (_req, res) => {
   for (const [k, v] of Object.entries(c.providerKeys)) {
     safeKeys[k] = v ? `${v.slice(0, 8)}...` : "";
   }
-  res.json({ ...c, providerKeys: safeKeys });
+  res.json({ ...c, providerKeys: safeKeys, projectDir: process.cwd() });
 });
 
 app.post("/api/config", (req, res) => {
@@ -235,6 +235,63 @@ app.post("/api/theme", (req, res) => {
     process.send({ type: "theme", theme });
   }
   res.json({ ok: true });
+});
+
+const pendingChooseDirRequests = new Map<string, (result: { path?: string; cancelled?: boolean }) => void>();
+
+if (process.send) {
+  process.on("message", (msg: any) => {
+    if (msg && msg.type === "choose-directory-response") {
+      const cb = pendingChooseDirRequests.get(msg.requestId);
+      if (cb) {
+        cb({ path: msg.path, cancelled: msg.cancelled });
+        pendingChooseDirRequests.delete(msg.requestId);
+      }
+    }
+  });
+}
+
+app.post("/api/choose-directory", (req, res) => {
+  if (_isElectron && process.send) {
+    const requestId = Math.random().toString(36).substring(2, 15);
+    pendingChooseDirRequests.set(requestId, (result) => {
+      if (result.cancelled) {
+        return res.json({ cancelled: true });
+      }
+      res.json({ path: result.path });
+    });
+    
+    // Auto-timeout after 5 minutes
+    setTimeout(() => {
+      if (pendingChooseDirRequests.has(requestId)) {
+        const cb = pendingChooseDirRequests.get(requestId);
+        if (cb) cb({ cancelled: true });
+        pendingChooseDirRequests.delete(requestId);
+      }
+    }, 5 * 60 * 1000);
+    
+    process.send({ type: "choose-directory", requestId });
+  } else {
+    const { exec } = require("child_process");
+    const isWindows = process.platform === "win32";
+    if (!isWindows) {
+      return res.status(400).json({ error: "Unsupported platform. Only Windows is supported." });
+    }
+
+    const psCommand = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '选择项目文件夹 / Select Project Folder'; $f.ShowNewFolderButton = $true; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }`;
+
+    exec(`powershell -NoProfile -Command "${psCommand}"`, (err: any, stdout: string, stderr: string) => {
+      if (err) {
+        log("error", "PowerShell choose-directory failed: " + err.message);
+        return res.status(500).json({ error: err.message });
+      }
+      const dirPath = stdout.trim();
+      if (!dirPath) {
+        return res.json({ cancelled: true });
+      }
+      res.json({ path: dirPath });
+    });
+  }
 });
 
 app.post("/api/test-provider", async (req, res) => {
@@ -365,14 +422,14 @@ app.get("/api/skills/:id", (req, res) => {
     // Scan scripts directory
     let scripts: string[] = [];
     const scriptsDir = path.join(skillPath, "scripts");
-    if (fs.existsSync(scriptsDir)) {
+    if (fs.existsSync(scriptsDir) && fs.statSync(scriptsDir).isDirectory()) {
       scripts = fs.readdirSync(scriptsDir).filter(f => f.endsWith(".py") || f.endsWith(".js"));
     }
 
     // Scan references directory
     let references: string[] = [];
     const referencesDir = path.join(skillPath, "references");
-    if (fs.existsSync(referencesDir)) {
+    if (fs.existsSync(referencesDir) && fs.statSync(referencesDir).isDirectory()) {
       references = fs.readdirSync(referencesDir).filter(f => f.endsWith(".md"));
     }
 
@@ -537,7 +594,60 @@ function parseFrontmatter(content: string): { name: string; description: string;
   return result;
 }
 
-function runSkillScript(skillId: string, scriptName: string, args: string[]): Promise<string> {
+function getSkillsSystemPrompt(): string {
+  if (!fs.existsSync(SKILLS_DIR)) {
+    return "";
+  }
+  try {
+    const dirs = fs.readdirSync(SKILLS_DIR);
+    let skillsSummary = "\n[Inherited Internal Agent Skills (融汇贯通)]\n";
+    skillsSummary += "You possess built-in specialized automation capabilities (skills) located at 'C:\\Users\\台就\\.agents\\skills'. You can invoke these directly via the 'run_skill_script' tool. Below is the full directory of your integrated capabilities:\n\n";
+
+    for (const d of dirs) {
+      const skillPath = path.join(SKILLS_DIR, d);
+      if (!fs.statSync(skillPath).isDirectory()) continue;
+
+      const skillFile = path.join(skillPath, "SKILL.md");
+      let skillName = d;
+      let skillDesc = "No description provided.";
+      let skillInstructions = "";
+
+      if (fs.existsSync(skillFile)) {
+        const text = fs.readFileSync(skillFile, "utf-8");
+        const parsed = parseFrontmatter(text);
+        skillName = parsed.name || d;
+        skillDesc = parsed.description || "";
+        skillInstructions = parsed.body || "";
+      }
+
+      const scriptsDir = path.join(skillPath, "scripts");
+      let scriptsList: string[] = [];
+      if (fs.existsSync(scriptsDir) && fs.statSync(scriptsDir).isDirectory()) {
+        scriptsList = fs.readdirSync(scriptsDir).filter(f => f.endsWith(".py") || f.endsWith(".js"));
+      }
+
+      skillsSummary += `### Skill ID: \`${d}\` (${skillName})\n`;
+      skillsSummary += `* **Description**: ${skillDesc}\n`;
+      if (skillInstructions) {
+        skillsSummary += `* **Usage Guidelines**:\n${skillInstructions.split("\n").map(l => "  " + l).join("\n")}\n`;
+      }
+      if (scriptsList.length > 0) {
+        skillsSummary += `* **Available Executable Scripts**:\n`;
+        for (const s of scriptsList) {
+          skillsSummary += `  - \`${s}\` (Run via \`run_skill_script(skillId: "${d}", scriptName: "${s}", arguments: [...])\`)\n`;
+        }
+      }
+      skillsSummary += "\n---\n\n";
+    }
+    return skillsSummary;
+  } catch (e) {
+    log("error", "Failed to generate skills system prompt: " + String(e));
+    return "";
+  }
+}
+
+
+function runSkillScript(skillId: string, scriptName: string, args: string[], workspacePath?: string): Promise<string> {
   return new Promise((resolve) => {
     const skillPath = path.join(SKILLS_DIR, skillId);
     const scriptPath = path.join(skillPath, "scripts", scriptName);
@@ -551,7 +661,10 @@ function runSkillScript(skillId: string, scriptName: string, args: string[]): Pr
       cmd = "python";
     }
     const isWindows = process.platform === "win32";
-    const child = spawn(cmd, runArgs, { shell: isWindows });
+    const child = spawn(cmd, runArgs, {
+      shell: isWindows,
+      env: { ...process.env, WORKSPACE_PATH: workspacePath || "", PROJECT_DIR: workspacePath || "" }
+    });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => stdout += d.toString());
@@ -560,6 +673,42 @@ function runSkillScript(skillId: string, scriptName: string, args: string[]): Pr
       resolve(`[Exit Code ${code}]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
     });
     child.on("error", (err) => {
+      resolve(`[Execution Error]:\n${err.message}`);
+    });
+  });
+}
+
+function executeTerminalCommand(command: string, workspacePath: string): Promise<string> {
+  return new Promise((resolve) => {
+    const isWindows = process.platform === "win32";
+    const cmd = isWindows ? "powershell" : "bash";
+    const runArgs = isWindows ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command] : ["-c", command];
+
+    const child = spawn(cmd, runArgs, {
+      cwd: workspacePath,
+      shell: isWindows,
+      env: { ...process.env }
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", (d) => stdout += d.toString());
+    child.stderr.on("data", (d) => stderr += d.toString());
+
+    // Auto-timeout after 30 seconds
+    const timeout = setTimeout(() => {
+      child.kill();
+      resolve(`[Command Timeout after 30s]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
+    }, 30000);
+
+    child.on("close", (code) => {
+      clearTimeout(timeout);
+      resolve(`[Exit Code ${code}]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timeout);
       resolve(`[Execution Error]:\n${err.message}`);
     });
   });
@@ -578,6 +727,170 @@ function accumulateCost(model: string, promptTokens: number, completionTokens: n
   if (!stats.totalCost) stats.totalCost = 0;
   stats.totalCost += cost;
   log("info", `[Billing] Model: ${model}, Prompt: ${promptTokens}, Completion: ${completionTokens}, Cost: $${cost.toFixed(6)}, Cumulative Cost: $${stats.totalCost.toFixed(4)}`);
+}
+
+async function handleAgentToolCall(tc: any, workspacePath: string): Promise<string> {
+  const toolName = tc.function.name;
+  let args: any = {};
+  try {
+    args = JSON.parse(tc.function.arguments || "{}");
+  } catch (e: any) {
+    return `Error: Failed to parse arguments: ${e.message}`;
+  }
+
+  if (toolName === "run_skill_script") {
+    try {
+      return await runSkillScript(args.skillId, args.scriptName, args.arguments, workspacePath);
+    } catch (e: any) {
+      return `Error running script: ${e.message}`;
+    }
+  }
+
+  if (toolName === "run_terminal_command") {
+    const cwdPath = (workspacePath && fs.existsSync(workspacePath)) ? workspacePath : process.cwd();
+    try {
+      return await executeTerminalCommand(args.command, cwdPath);
+    } catch (e: any) {
+      return `Error executing command: ${e.message}`;
+    }
+  }
+
+  if (toolName === "list_workspace_files") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected in the UI. Please ask the user to select a workspace directory.";
+    }
+    try {
+      const walk = (dir: string, depth = 0): string[] => {
+        if (depth > 3) return [];
+        let results: string[] = [];
+        const list = fs.readdirSync(dir, { withFileTypes: true });
+        for (const item of list) {
+          const resPath = path.join(dir, item.name);
+          const relPath = path.relative(workspacePath, resPath);
+          if (item.isDirectory()) {
+            if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
+            results.push(relPath + "/");
+            results.push(...walk(resPath, depth + 1));
+          } else {
+            results.push(relPath);
+          }
+        }
+        return results;
+      };
+      const files = walk(workspacePath);
+      if (files.length === 0) return "Workspace directory is empty.";
+      return `Workspace files in ${workspacePath}:\n${files.map(f => `- ${f}`).join("\n")}`;
+    } catch (e: any) {
+      return `Error listing files: ${e.message}`;
+    }
+  }
+
+  if (toolName === "read_workspace_file") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected.";
+    }
+    try {
+      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
+      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+        return "Error: Path traversal violation. Access denied.";
+      }
+      if (!fs.existsSync(fullPath)) {
+        return `Error: File not found at ${args.relativeFilePath}`;
+      }
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) {
+        return `Error: Target ${args.relativeFilePath} is not a file.`;
+      }
+      return fs.readFileSync(fullPath, "utf-8");
+    } catch (e: any) {
+      return `Error reading file: ${e.message}`;
+    }
+  }
+
+  if (toolName === "write_workspace_file") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected.";
+    }
+    try {
+      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
+      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+        return "Error: Path traversal violation. Access denied.";
+      }
+      const parentDir = path.dirname(fullPath);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+      }
+      fs.writeFileSync(fullPath, args.content || "", "utf-8");
+      return `Success: File written successfully to ${args.relativeFilePath}`;
+    } catch (e: any) {
+      return `Error writing file: ${e.message}`;
+    }
+  }
+
+  if (toolName === "list_available_skills") {
+    try {
+      if (!fs.existsSync(SKILLS_DIR)) {
+        return `Error: Skills folder not found at ${SKILLS_DIR}`;
+      }
+      const dirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
+      const skillDirs = dirs.filter(d => d.isDirectory());
+      const list: string[] = [];
+      for (const d of skillDirs) {
+        const skillPath = path.join(SKILLS_DIR, d.name);
+        const mdFile = path.join(skillPath, "SKILL.md");
+        let name = d.name;
+        let desc = "No description available.";
+        if (fs.existsSync(mdFile)) {
+          const text = fs.readFileSync(mdFile, "utf-8");
+          const fm = parseFrontmatter(text);
+          if (fm.name) name = fm.name;
+          if (fm.description) desc = fm.description;
+        }
+        list.push(`- skillId: "${d.name}"\n  name: "${name}"\n  description: "${desc}"`);
+      }
+      return `Available agent skills in ${SKILLS_DIR}:\n\n${list.join("\n\n")}`;
+    } catch (e: any) {
+      return `Error listing skills: ${e.message}`;
+    }
+  }
+
+  if (toolName === "get_skill_details") {
+    try {
+      const skillId = args.skillId;
+      const skillPath = path.join(SKILLS_DIR, skillId);
+      if (!fs.existsSync(skillPath)) {
+        return `Error: Skill "${skillId}" not found.`;
+      }
+      const mdFile = path.join(skillPath, "SKILL.md");
+      let documentation = "No SKILL.md documentation found.";
+      if (fs.existsSync(mdFile)) {
+        documentation = fs.readFileSync(mdFile, "utf-8");
+      }
+      let scriptsList: string[] = [];
+      const scriptsDir = path.join(skillPath, "scripts");
+      if (fs.existsSync(scriptsDir) && fs.statSync(scriptsDir).isDirectory()) {
+        const files = fs.readdirSync(scriptsDir);
+        scriptsList = files.filter(f => f.endsWith(".py") || f.endsWith(".js") || f.endsWith(".ps1") || f.endsWith(".sh"));
+      }
+      return `Skill Details for "${skillId}":\n\n[Documentation (SKILL.md)]:\n${documentation}\n\n[Executable scripts in scripts/ folder]:\n${scriptsList.length > 0 ? scriptsList.map(s => `- ${s}`).join("\n") : "None"}`;
+    } catch (e: any) {
+      return `Error loading skill details: ${e.message}`;
+    }
+  }
+
+  if (toolName.startsWith("mcp_")) {
+    const parts = toolName.split("_");
+    const serverName = parts[1];
+    const actualToolName = parts.slice(2).join("_");
+    try {
+      const result = await executeMCPTool(serverName, actualToolName, args);
+      return JSON.stringify(result);
+    } catch (e: any) {
+      return `Error executing MCP tool: ${e.message}`;
+    }
+  }
+
+  return `Error: Unknown tool: ${toolName}`;
 }
 
 async function executeAgentCompletions(
@@ -611,6 +924,7 @@ async function executeAgentCompletions(
   // Clean custom attributes before sending upstream
   delete requestBody.activeSkillId;
   delete requestBody.useAgent;
+  delete requestBody.workspacePath;
 
   let targetUrl: string;
   let headers: Record<string, string>;
@@ -653,10 +967,12 @@ async function executeAgentCompletions(
       throw new Error(`Upstream returned ${upstreamResp.status}: ${errText}`);
     }
 
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+    }
 
     let accumulatedToolCalls: any[] = [];
     let accumulatedText = "";
@@ -720,26 +1036,8 @@ async function executeAgentCompletions(
 
       for (const tc of toolCalls) {
         writeDelta(`\n\n> 🔧 **Agent Executing Tool:** \`${tc.function.name}\`...\n`);
-        let output = "";
-        if (tc.function.name === "run_skill_script") {
-          try {
-            const args = JSON.parse(tc.function.arguments);
-            output = await runSkillScript(activeSkillId, args.scriptName, args.arguments);
-          } catch (e: any) {
-            output = `Error running script: ${e.message}`;
-          }
-        } else if (tc.function.name.startsWith("mcp_")) {
-          const parts = tc.function.name.split("_");
-          const serverName = parts[1];
-          const toolName = parts.slice(2).join("_");
-          try {
-            const args = JSON.parse(tc.function.arguments);
-            const result = await executeMCPTool(serverName, toolName, args);
-            output = JSON.stringify(result);
-          } catch (e: any) {
-            output = `Error executing MCP tool: ${e.message}`;
-          }
-        }
+        const workspacePath = body.workspacePath || "";
+        const output = await handleAgentToolCall(tc, workspacePath);
         writeDelta(`\n\`\`\`\n${output}\n\`\`\`\n`);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
       }
@@ -779,26 +1077,8 @@ async function executeAgentCompletions(
     if (choice?.message?.tool_calls && choice.message.tool_calls.length > 0) {
       messages.push(choice.message);
       for (const tc of choice.message.tool_calls) {
-        let output = "";
-        if (tc.function.name === "run_skill_script") {
-          try {
-            const args = JSON.parse(tc.function.arguments);
-            output = await runSkillScript(activeSkillId, args.scriptName, args.arguments);
-          } catch (e: any) {
-            output = `Error running script: ${e.message}`;
-          }
-        } else if (tc.function.name.startsWith("mcp_")) {
-          const parts = tc.function.name.split("_");
-          const serverName = parts[1];
-          const toolName = parts.slice(2).join("_");
-          try {
-            const args = JSON.parse(tc.function.arguments);
-            const result = await executeMCPTool(serverName, toolName, args);
-            output = JSON.stringify(result);
-          } catch (e: any) {
-            output = `Error executing MCP tool: ${e.message}`;
-          }
-        }
+        const workspacePath = body.workspacePath || "";
+        const output = await handleAgentToolCall(tc, workspacePath);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
       }
       return executeAgentCompletions(req, res, body, resolved, messages, tools, useAgent, activeSkillId, startTime, cacheKey, depth + 1);
@@ -869,37 +1149,177 @@ app.post("/v1/chat/completions", async (req, res) => {
     }
   }
 
-  // Collect Tools: Active Skill scripts + MCP tools
+  // Inject Workspace and Skills System Prompts if useAgent is true
+  if (useAgent) {
+    let agentPrompt = `[Agentic Mode (Build)]
+You are running in Build (Agentic) mode. You have access to internal/built-in agent skills under "C:\\Users\\台就\\.agents\\skills". You can list, detail, and execute scripts from these skills using available tools to automate tasks (e.g., editing documents, Excel, PPT files, writing scripts, running tests).
+
+[Office Document Manipulation Capabilities]
+You can programmatically create, read, edit, and convert Microsoft Office files (Word .docx, Excel .xlsx, PowerPoint .pptx) and PDFs using Python libraries.
+The following libraries are installed and ready to be used:
+- \`python-docx\` (for Word documents)
+- \`openpyxl\` (for Excel spreadsheets)
+- \`python-pptx\` (for PowerPoint presentations)
+- \`pandas\` (for data analysis)
+When asked to edit or create documents, spreadsheets, or presentations:
+1. Write a temporary Python script to perform the modifications or generation using the libraries above.
+2. Save the script using \`write_workspace_file\` (e.g. as \`temp_edit.py\`).
+3. Run the script using \`run_terminal_command\` (e.g. \`python temp_edit.py\`).
+4. Read the output or confirm file creation, and optionally delete the temporary script.
+
+[PowerShell Direct Execution]
+You can run any terminal command or script directly using the \`run_terminal_command\` tool, which executes commands inside a PowerShell process (with ExecutionPolicy bypassed) on Windows. If no workspace is selected, commands will run in the server's working directory.
+
+[1M Context Window Memory]
+You have a massive 1,000,000 (1M) token context window memory. You can read, process, and retain large files, extensive project logs, and multiple workspace documents simultaneously without losing context.
+
+[Task Planning & Sequential Execution]
+When the user issues a command that requires multiple steps, you must:
+1. First, create a "Task Plan" at the very beginning of your response using standard task markdown list format:
+   - [ ] Task Description (for pending tasks)
+   - [/] Task Description (for the active task currently executing)
+   - [x] Task Description (for completed tasks)
+2. Execute each task sequentially by calling the appropriate tools.
+3. Update the task status (e.g. change [ ] to [/] and then to [x]) in your follow-up text responses after tool executions, and continue this loop until all tasks are finished.
+` + getSkillsSystemPrompt();
+    if (body.workspacePath) {
+      agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou can use list_workspace_files, read_workspace_file, and write_workspace_file to scan, inspect, edit, or create files inside this workspace directory. Use these capabilities to autonomously read and edit workspace documents or run skill scripts directly to finish editing work.`;
+    } else {
+      agentPrompt += `\nNo active workspace folder is currently selected. If you need to access files, please ask the user to select or edit the workspace directory using the UI.`;
+    }
+    const systemMsgIdx = messages.findIndex(m => m.role === "system");
+    if (systemMsgIdx >= 0) {
+      messages[systemMsgIdx] = {
+        role: "system",
+        content: messages[systemMsgIdx].content + "\n\n" + agentPrompt
+      };
+    } else {
+      messages.unshift({ role: "system", content: agentPrompt });
+    }
+  }
+
+  // Collect Tools: Active Skill scripts + MCP tools + built-in workspace & skill tools
   let tools = [...(body.tools || [])];
   if (useAgent) {
-    if (activeSkillId) {
-      try {
-        const scriptsDir = path.join(SKILLS_DIR, activeSkillId, "scripts");
-        if (fs.existsSync(scriptsDir)) {
-          const files = fs.readdirSync(scriptsDir);
-          const scripts = files.filter(f => f.endsWith(".py") || f.endsWith(".js"));
-          if (scripts.length > 0) {
-            tools.push({
-              type: "function",
-              function: {
-                name: "run_skill_script",
-                description: `Run helper automation scripts associated with this skill. Available scripts: [${scripts.join(", ")}]. Output stdout/stderr will be returned to you.`,
-                parameters: {
-                  type: "object",
-                  properties: {
-                    scriptName: { type: "string", description: "The script filename to run" },
-                    arguments: { type: "array", items: { type: "string" }, description: "String arguments to pass to the script" }
-                  },
-                  required: ["scriptName", "arguments"]
-                }
-              }
-            });
-          }
+    // 1. Add workspace & internal skills tools
+    tools.push({
+      type: "function",
+      function: {
+        name: "run_terminal_command",
+        description: "Execute a terminal command on the host machine using PowerShell within the active workspace directory.",
+        parameters: {
+          type: "object",
+          properties: {
+            command: {
+              type: "string",
+              description: "The exact shell command to run (e.g. 'npm run build', 'git status', 'python test.py', etc.)"
+            }
+          },
+          required: ["command"]
         }
-      } catch (e) {
-        log("error", "Failed to load skill scripts as tools:", e);
       }
-    }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "list_workspace_files",
+        description: "List all files in the active workspace recursively up to 3 levels deep (excluding node_modules, .git, and dist)."
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "read_workspace_file",
+        description: "Read the contents of a file inside the active workspace.",
+        parameters: {
+          type: "object",
+          properties: {
+            relativeFilePath: {
+              type: "string",
+              description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx' or 'document.txt')"
+            }
+          },
+          required: ["relativeFilePath"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "write_workspace_file",
+        description: "Create or overwrite a file in the active workspace with the provided content.",
+        parameters: {
+          type: "object",
+          properties: {
+            relativeFilePath: {
+              type: "string",
+              description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx' or 'document.txt')"
+            },
+            content: {
+              type: "string",
+              description: "The complete content to write into the file"
+            }
+          },
+          required: ["relativeFilePath", "content"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "list_available_skills",
+        description: "List all available internal/built-in agent skills under the skills directory (C:\\Users\\台就\\.agents\\skills), including their skill ID, name, and description."
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "get_skill_details",
+        description: "Get detailed documentation (SKILL.md) and list of executable helper automation scripts (py/js files) for a specific skill by skill ID.",
+        parameters: {
+          type: "object",
+          properties: {
+            skillId: {
+              type: "string",
+              description: "The skill ID (e.g. folder name under C:\\Users\\台就\\.agents\\skills directory)"
+            }
+          },
+          required: ["skillId"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "run_skill_script",
+        description: "Execute a script inside a skill folder (e.g. standard python/js automation tool script) with arguments, and return the execution results.",
+        parameters: {
+          type: "object",
+          properties: {
+            skillId: {
+              type: "string",
+              description: "The skill ID containing the script"
+            },
+            scriptName: {
+              type: "string",
+              description: "The filename of the script to run (e.g. 'generate_report.py')"
+            },
+            arguments: {
+              type: "array",
+              items: { type: "string" },
+              description: "List of string arguments to pass to the script"
+            }
+          },
+          required: ["skillId", "scriptName", "arguments"]
+        }
+      }
+    });
 
     const mcpTools = getAllMCPTools();
     for (const tool of mcpTools) {
@@ -915,7 +1335,8 @@ app.post("/v1/chat/completions", async (req, res) => {
   }
 
   // Load Balancing and Disaster Recovery Fallback Loop
-  const mainProviderId = loadConfig().activeProviderId;
+  const resolvedTarget = resolveModel(body.model);
+  const mainProviderId = resolvedTarget.provider.id;
   const fallbackIds = loadConfig().fallbackProviderIds || [];
   const providersToTry = [mainProviderId, ...fallbackIds.filter(id => id !== mainProviderId)];
 
@@ -928,12 +1349,12 @@ app.post("/v1/chat/completions", async (req, res) => {
 
     const resolved = {
       provider,
-      model: body.model,
+      model: provId === resolvedTarget.provider.id ? resolvedTarget.model : body.model,
       apiKey
     };
 
     // If model is not native, map to first model
-    const isNative = provider.models.some(m => m.id === body.model);
+    const isNative = provider.models.some(m => m.id === resolved.model);
     if (!isNative && provider.models.length > 0) {
       resolved.model = provider.models[0].id;
     }

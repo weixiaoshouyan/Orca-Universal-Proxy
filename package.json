@@ -8,7 +8,7 @@
     "build:ui": "cd frontend && npm install && npm run build",
     "build": "npm run build:ui && tsc && esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs",
     "start": "electron .",
-    "package": "npm run build:ui && tsc && esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs && electron-builder --win --dir"
+    "package": "npm run build:ui && tsc && esbuild src/index.ts --bundle --platform=node --target=node18 --outfile=dist/bundle.js --format=cjs && electron-builder --win"
   },
   "build": {
     "appId": "com.orca.proxy",
@@ -28,6 +28,12 @@
       "target": [
         {
           "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
           "arch": [
             "x64"
           ]

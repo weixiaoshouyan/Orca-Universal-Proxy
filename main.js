@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -53,17 +53,31 @@ function startServer() {
       if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
       const tmpBundle = path.join(tmpDir, 'bundle.js');
       fs.copyFileSync(bundlePath, tmpBundle);
-      // Also copy public directory
-      const tmpPublic = path.join(tmpDir, 'public');
-      if (!fs.existsSync(tmpPublic)) fs.mkdirSync(tmpPublic, { recursive: true });
+      
+      // Also copy public directory to userData/public
+      const tmpPublic = path.join(app.getPath('userData'), 'public');
       const srcPublic = path.join(__dirname, 'public');
-      if (fs.existsSync(srcPublic)) {
-        const files = fs.readdirSync(srcPublic);
-        for (const file of files) {
-          const stat = fs.statSync(path.join(srcPublic, file));
+      
+      function copyFolderRecursiveSync(from, to) {
+        if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
+        const items = fs.readdirSync(from);
+        for (const item of items) {
+          const srcPath = path.join(from, item);
+          const dstPath = path.join(to, item);
+          const stat = fs.statSync(srcPath);
           if (stat.isFile()) {
-            fs.copyFileSync(path.join(srcPublic, file), path.join(tmpPublic, file));
+            fs.copyFileSync(srcPath, dstPath);
+          } else if (stat.isDirectory()) {
+            copyFolderRecursiveSync(srcPath, dstPath);
           }
+        }
+      }
+
+      if (fs.existsSync(srcPublic)) {
+        try {
+          copyFolderRecursiveSync(srcPublic, tmpPublic);
+        } catch (e) {
+          console.error('[Main] Failed to copy public folder:', e);
         }
       }
       serverScript = tmpBundle;
@@ -101,6 +115,25 @@ function startServer() {
         } catch (e) {
           console.error('[Main] Failed to update title bar overlay:', e);
         }
+      } else if (msg && msg.type === 'choose-directory' && mainWindow) {
+        dialog.showOpenDialog(mainWindow, {
+          title: '选择项目文件夹 / Select Project Folder',
+          properties: ['openDirectory', 'createDirectory']
+        }).then(result => {
+          serverProcess.send({
+            type: 'choose-directory-response',
+            requestId: msg.requestId,
+            path: result.canceled ? undefined : result.filePaths[0],
+            cancelled: result.canceled
+          });
+        }).catch(err => {
+          serverProcess.send({
+            type: 'choose-directory-response',
+            requestId: msg.requestId,
+            cancelled: true,
+            error: err.message
+          });
+        });
       }
     });
 
@@ -166,7 +199,7 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
     mainWindow.focus();
-    mainWindow.webContents.openDevTools();
+    // mainWindow.webContents.openDevTools();
   });
 
   // Handle external links

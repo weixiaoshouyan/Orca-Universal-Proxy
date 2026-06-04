@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Paperclip, Mic, Plus, Trash2, FileText, X, Square, RotateCcw, Terminal, Loader, CheckCircle } from 'lucide-react';
+import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, fetchEventSource } from '../api';
 import { translate as t } from '../i18n';
@@ -8,15 +8,38 @@ import type { Language } from '../i18n';
 interface Message {
   role: string;
   content: string;
+  timestamp?: string;
 }
 
 interface Conversation {
   id: string;
+  workspaceId?: string;
   title: string;
   preset: string; // 'standard' | 'code' | 'bug' | 'translate'
   quality: string; // 'high' | 'medium' | 'low' | 'creative'
   model: string;
   messages: Message[];
+}
+
+function PenSquareIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={props.className}
+      style={props.style}
+    >
+      <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+      <path d="M18.5 2.5a2.12 2.12 0 1 1 3 3L12 15l-4 1 1-4Z" />
+    </svg>
+  );
 }
 
 export default function Chat({ lang }: { lang: Language }) {
@@ -26,12 +49,80 @@ export default function Chat({ lang }: { lang: Language }) {
   const [input, setInput] = useState('');
   const [models, setModels] = useState<{ id: string; name: string; providerName: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'skill'>('none');
+  const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'skill' | 'buildPlan'>('none');
   
   // Agent mode & skills state
   const [useAgent, setUseAgent] = useState(true);
-  const [activeSkillId, setActiveSkillId] = useState('');
-  const [skills, setSkills] = useState<any[]>([]);
+  const activeSkillId = '';
+
+  // Workspace selector state
+  interface Workspace {
+    id: string;
+    name: string;
+    path: string;
+    initial: string;
+  }
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState<string>('');
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const [historySidebarWidth, setHistorySidebarWidth] = useState(() => {
+    return parseInt(localStorage.getItem('orca_chat_history_width') || '220');
+  });
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = historySidebarWidth;
+    
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = moveEvent.clientX - startX;
+      const newWidth = Math.max(160, Math.min(400, startWidth + deltaX));
+      setHistorySidebarWidth(newWidth);
+      localStorage.setItem('orca_chat_history_width', String(newWidth));
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const filteredConversations = conversations.filter(c => 
+    !activeWorkspaceId || c.workspaceId === activeWorkspaceId
+  );
+
+  // Switch conversation when active workspace changes
+  useEffect(() => {
+    if (!activeWorkspaceId || conversations.length === 0 || models.length === 0) return;
+    
+    // Check if current activeId belongs to current active workspace
+    const hasActiveForWs = conversations.some(c => c.id === activeId && c.workspaceId === activeWorkspaceId);
+    if (hasActiveForWs) return;
+
+    // Try to find any conversation for this workspace
+    const wsChats = conversations.filter(c => c.workspaceId === activeWorkspaceId);
+    if (wsChats.length > 0) {
+      setActiveId(wsChats[0].id);
+    } else {
+      // Create a default one for this workspace
+      const defaultId = 'chat_' + Date.now();
+      const defaultChat: Conversation = {
+        id: defaultId,
+        workspaceId: activeWorkspaceId,
+        title: lang === 'en' ? 'New Chat' : '新会话',
+        preset: 'standard',
+        quality: 'high',
+        model: (conversations.find(c => c.id === activeId)?.model) || models[0]?.id || 'deepseek-chat',
+        messages: [{ role: 'system', content: presets.standard.systemPrompt }]
+      };
+      const updated = [defaultChat, ...conversations];
+      setActiveId(defaultId);
+      saveChatsToStorage(updated);
+    }
+  }, [activeWorkspaceId, conversations.length, models.length]);
 
   // File upload state
   const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
@@ -49,7 +140,7 @@ export default function Chat({ lang }: { lang: Language }) {
   const presets: Record<string, { name: string; systemPrompt: string }> = {
     standard: {
       name: lang === 'en' ? 'Standard Assistant' : '标准助手 (Standard)',
-      systemPrompt: lang === 'en' ? 'You are connected to Orca Smart Gateway. Ready to test model connectivity.' : '您已连接至 Orca 智能网关。可以开始测试模型连通性。'
+      systemPrompt: lang === 'en' ? 'You are Orca, a premium AI agent assistant. Help the user with their queries, tasks, and software engineering needs.' : '你是一个专业的 AI 智能助手。你可以协助用户解答日常提问、提供编程方案、审计系统并执行多步骤任务。'
     },
     code: {
       name: lang === 'en' ? 'Code Expert' : '代码专家 (Code Architect)',
@@ -66,10 +157,9 @@ export default function Chat({ lang }: { lang: Language }) {
   };
 
   const qualities: Record<string, { name: string; temp: number }> = {
-    high: { name: lang === 'en' ? 'High Quality (T=0.7)' : '高品质 (T=0.7)', temp: 0.7 },
-    medium: { name: lang === 'en' ? 'Balanced (T=0.5)' : '中等均衡 (T=0.5)', temp: 0.5 },
-    low: { name: lang === 'en' ? 'Deterministic (T=0.0)' : '精确输出 (T=0.0)', temp: 0.0 },
-    creative: { name: lang === 'en' ? 'Creative (T=0.9)' : '创意脑暴 (T=0.9)', temp: 0.9 }
+    low: { name: 'Low', temp: 0.1 },
+    medium: { name: 'Medium', temp: 0.5 },
+    high: { name: 'High', temp: 0.9 }
   };
 
   // Load configured models from backend
@@ -92,36 +182,125 @@ export default function Chat({ lang }: { lang: Language }) {
       
       // Load conversations from local storage
       const savedChats = localStorage.getItem('orca_conversations');
+      let loadedConversations: Conversation[] = [];
       if (savedChats) {
         try {
           const parsed = JSON.parse(savedChats);
-          if (parsed.length > 0) {
-            setConversations(parsed);
-            setActiveId(parsed[0].id);
-            return;
+          if (Array.isArray(parsed)) {
+            loadedConversations = parsed.map(c => ({
+              ...c,
+              workspaceId: c.workspaceId || 'ws_default'
+            }));
           }
         } catch (e) {}
       }
       
-      // If no saved conversations, create a default one
-      const defaultId = 'chat_' + Date.now();
-      const defaultChat: Conversation = {
-        id: defaultId,
-        title: lang === 'en' ? 'New Chat' : '新会话',
-        preset: 'standard',
-        quality: 'high',
-        model: activeModels[0]?.id || 'deepseek-chat',
-        messages: [{ role: 'system', content: presets.standard.systemPrompt }]
-      };
-      setConversations([defaultChat]);
-      setActiveId(defaultId);
-      localStorage.setItem('orca_conversations', JSON.stringify([defaultChat]));
+      if (loadedConversations.length > 0) {
+        setConversations(loadedConversations);
+        setActiveId(loadedConversations[0].id);
+      } else {
+        // If no saved conversations, create a default one
+        const defaultId = 'chat_' + Date.now();
+        const defaultChat: Conversation = {
+          id: defaultId,
+          workspaceId: 'ws_default',
+          title: lang === 'en' ? 'New Chat' : '新会话',
+          preset: 'standard',
+          quality: 'high',
+          model: activeModels[0]?.id || 'deepseek-chat',
+          messages: [{ role: 'system', content: presets.standard.systemPrompt }]
+        };
+        setConversations([defaultChat]);
+        setActiveId(defaultId);
+        localStorage.setItem('orca_conversations', JSON.stringify([defaultChat]));
+      }
+    }).catch(console.error);
+  }, []);
+
+  // Load workspaces and skills lists on mount
+  useEffect(() => {
+    api.get('/api/config').then(configRes => {
+      const savedWorkspaces = localStorage.getItem('orca_workspaces');
+      let wsList: Workspace[] = [];
+      if (savedWorkspaces) {
+        try { wsList = JSON.parse(savedWorkspaces); } catch (e) {}
+      }
+      
+      if (wsList.length === 0) {
+        const defaultPath = configRes.data?.projectDir || 'E:\\工作\\SDA配置\\orca';
+        const defaultName = defaultPath.split(/[\\/]/).pop() || 'orca';
+        const defaultWs = {
+          id: 'ws_default',
+          name: defaultName,
+          path: defaultPath,
+          initial: defaultName.charAt(0).toUpperCase()
+        };
+        wsList = [defaultWs];
+        localStorage.setItem('orca_workspaces', JSON.stringify(wsList));
+      }
+      setWorkspaces(wsList);
+      
+      const savedActiveWs = localStorage.getItem('orca_active_ws');
+      if (savedActiveWs && wsList.some(w => w.id === savedActiveWs)) {
+        setActiveWorkspaceId(savedActiveWs);
+      } else {
+        setActiveWorkspaceId(wsList[0].id);
+      }
     }).catch(console.error);
   }, []);
 
   useEffect(() => {
-    api.get('/api/skills').then(res => setSkills(res.data)).catch(console.error);
-  }, []);
+    if (activeWorkspaceId) {
+      localStorage.setItem('orca_active_ws', activeWorkspaceId);
+    }
+  }, [activeWorkspaceId]);
+
+  const handleChooseDirectory = (workspaceIdToEdit?: string) => {
+    api.post('/api/choose-directory').then(res => {
+      if (res.data && res.data.path) {
+        const dirPath = res.data.path;
+        const separator = dirPath.includes('\\') ? '\\' : '/';
+        const parts = dirPath.split(separator);
+        const dirName = parts.pop() || 'folder';
+
+        if (workspaceIdToEdit) {
+          const updated = workspaces.map(w => {
+            if (w.id === workspaceIdToEdit) {
+              return {
+                ...w,
+                name: dirName,
+                path: dirPath,
+                initial: dirName.charAt(0).toUpperCase()
+              };
+            }
+            return w;
+          });
+          setWorkspaces(updated);
+          localStorage.setItem('orca_workspaces', JSON.stringify(updated));
+        } else {
+          if (workspaces.some(w => w.path === dirPath)) {
+            const existing = workspaces.find(w => w.path === dirPath);
+            if (existing) setActiveWorkspaceId(existing.id);
+            return;
+          }
+
+          const newWs: Workspace = {
+            id: 'ws_' + Date.now(),
+            name: dirName,
+            path: dirPath,
+            initial: dirName.charAt(0).toUpperCase()
+          };
+          
+          const updated = [...workspaces, newWs];
+          setWorkspaces(updated);
+          setActiveWorkspaceId(newWs.id);
+          localStorage.setItem('orca_workspaces', JSON.stringify(updated));
+        }
+      }
+    }).catch(err => {
+      console.error("Failed to choose directory:", err);
+    });
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -159,17 +338,45 @@ export default function Chat({ lang }: { lang: Language }) {
   }, []);
 
   const activeChat = conversations.find(c => c.id === activeId);
+  const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId);
 
-  const saveChatsToStorage = (updated: Conversation[]) => {
+  const modelsByProvider = models.reduce((acc, m) => {
+    const provider = m.providerName || 'Unknown';
+    if (!acc[provider]) {
+      acc[provider] = [];
+    }
+    acc[provider].push(m);
+    return acc;
+  }, {} as Record<string, typeof models>);
+
+  const getWorkspaceStyles = (name: string, isActive: boolean) => {
+    const char = name.charAt(0).toUpperCase();
+    const code = char.charCodeAt(0) % 4;
+    
+    if (isActive) {
+      return 'w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer border-[2px] border-[#1a3a4b] text-[#24818d] bg-[#e2f3f5] font-extrabold shadow-sm';
+    }
+    
+    const palettes = [
+      'w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer border border-transparent text-[#9c5a9c] bg-[#f6eaf6] hover:opacity-90',
+      'w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer border border-transparent text-[#5c8a5c] bg-[#eaf6ea] hover:opacity-90',
+      'w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer border border-transparent text-[#5c6ea3] bg-[#eaeaf6] hover:opacity-90',
+      'w-10 h-10 rounded-[10px] flex items-center justify-center text-sm font-bold transition-all relative cursor-pointer border border-transparent text-[#a35c5c] bg-[#f6eaea] hover:opacity-90',
+    ];
+    return palettes[code];
+  };
+
+  function saveChatsToStorage(updated: Conversation[]) {
     setConversations(updated);
     localStorage.setItem('orca_conversations', JSON.stringify(updated));
-  };
+  }
 
   const handleNewChat = () => {
     const newId = 'chat_' + Date.now();
     const newChat: Conversation = {
       id: newId,
-      title: (lang === 'en' ? 'New Chat ' : '新会话 ') + (conversations.length + 1),
+      workspaceId: activeWorkspaceId,
+      title: (lang === 'en' ? 'New Chat ' : '新会话 ') + (filteredConversations.length + 1),
       preset: 'standard',
       quality: 'high',
       model: activeChat?.model || models[0]?.id || 'deepseek-chat',
@@ -205,24 +412,6 @@ export default function Chat({ lang }: { lang: Language }) {
     saveChatsToStorage(updated);
   };
 
-  // Change preset (Build)
-  const handlePresetChange = (presetKey: string) => {
-    if (!activeChat) return;
-    const updated = conversations.map(c => {
-      if (c.id === activeId) {
-        // Replace system prompt
-        const msgs = [...c.messages];
-        if (msgs[0] && msgs[0].role === 'system') {
-          msgs[0] = { role: 'system', content: presets[presetKey].systemPrompt };
-        } else {
-          msgs.unshift({ role: 'system', content: presets[presetKey].systemPrompt });
-        }
-        return { ...c, preset: presetKey, messages: msgs };
-      }
-      return c;
-    });
-    saveChatsToStorage(updated);
-  };
 
   // Change quality (Temperature)
   const handleQualityChange = (qualityKey: string) => {
@@ -289,7 +478,8 @@ export default function Chat({ lang }: { lang: Language }) {
         : `[附带文件: ${attachedFile.name}]\n\`\`\`\n${attachedFile.content}\n\`\`\`\n${userPrompt}`;
     }
 
-    const newMessages = [...activeChat.messages, { role: 'user', content: userPrompt }];
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const newMessages = [...activeChat.messages, { role: 'user', content: userPrompt, timestamp: timeStr }];
     
     // Clear input & attachments
     setInput('');
@@ -298,7 +488,7 @@ export default function Chat({ lang }: { lang: Language }) {
 
     // Update conversation state temporarily
     const assistantIndex = newMessages.length;
-    const initialAssistantMessages = [...newMessages, { role: 'assistant', content: '' }];
+    const initialAssistantMessages = [...newMessages, { role: 'assistant', content: '', timestamp: timeStr }];
     
     // Update local state and memory
     const tempUpdated = conversations.map(c => {
@@ -314,14 +504,15 @@ export default function Chat({ lang }: { lang: Language }) {
     setConversations(tempUpdated);
 
     // Prepare API body parameters
-    const tempValue = qualities[activeChat.quality]?.temp ?? 0.7;
+    const tempValue = (qualities[activeChat.quality] || qualities.high).temp;
     const body = {
       model: activeChat.model,
       messages: newMessages.filter(m => m.role !== 'system'),
       temperature: tempValue,
       stream: true,
       useAgent,
-      activeSkillId
+      activeSkillId,
+      workspacePath: activeWorkspace?.path || ''
     };
 
     await fetchEventSource('/v1/chat/completions', body, 
@@ -337,7 +528,8 @@ export default function Chat({ lang }: { lang: Language }) {
                   if (msgs[assistantIndex]) {
                     msgs[assistantIndex] = {
                       role: 'assistant',
-                      content: msgs[assistantIndex].content + delta
+                      content: msgs[assistantIndex].content + delta,
+                      timestamp: msgs[assistantIndex].timestamp || timeStr
                     };
                   }
                   return { ...c, messages: msgs };
@@ -361,7 +553,8 @@ export default function Chat({ lang }: { lang: Language }) {
               if (msgs[assistantIndex]) {
                 msgs[assistantIndex] = {
                   role: 'assistant',
-                  content: msgs[assistantIndex].content + '\n\n[Error: Failed to fetch response from proxy]'
+                  content: msgs[assistantIndex].content + '\n\n[Error: Failed to fetch response from proxy]',
+                  timestamp: msgs[assistantIndex].timestamp || timeStr
                 };
               }
               return { ...c, messages: msgs };
@@ -376,40 +569,36 @@ export default function Chat({ lang }: { lang: Language }) {
     );
   };
 
-  const handleRollback = () => {
-    if (!activeChat || activeChat.messages.length <= 1) return;
-    
-    let lastUserPrompt = '';
+
+
+  const rollbackTo = (idx: number) => {
+    if (!activeChat || idx < 0 || idx >= activeChat.messages.length) return;
     const msgs = [...activeChat.messages];
-    
-    // Find last user message
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i].role === 'user') {
-        lastUserPrompt = msgs[i].content;
-        // Strip attached file wrapper if present
-        if (lastUserPrompt.startsWith('[Attached File:') || lastUserPrompt.startsWith('[附带文件:')) {
-          const lines = lastUserPrompt.split('\n');
-          let codeBlockEnd = -1;
-          for (let j = 0; j < lines.length; j++) {
-            if (lines[j].trim() === '```') {
-              codeBlockEnd = j;
-            }
-          }
-          if (codeBlockEnd !== -1 && codeBlockEnd < lines.length - 1) {
-            lastUserPrompt = lines.slice(codeBlockEnd + 1).join('\n');
-          }
+    let targetUserMsgIdx = -1;
+    if (msgs[idx].role === 'user') {
+      targetUserMsgIdx = idx;
+    } else if (msgs[idx].role === 'assistant' && idx > 0 && msgs[idx - 1].role === 'user') {
+      targetUserMsgIdx = idx - 1;
+    }
+
+    if (targetUserMsgIdx === -1) return;
+
+    let targetUserPrompt = msgs[targetUserMsgIdx].content;
+    // Strip attached file wrapper if present
+    if (targetUserPrompt.startsWith('[Attached File:') || targetUserPrompt.startsWith('[附带文件:')) {
+      const lines = targetUserPrompt.split('\n');
+      let codeBlockEnd = -1;
+      for (let j = 0; j < lines.length; j++) {
+        if (lines[j].trim() === '```') {
+          codeBlockEnd = j;
         }
-        break;
+      }
+      if (codeBlockEnd !== -1 && codeBlockEnd < lines.length - 1) {
+        targetUserPrompt = lines.slice(codeBlockEnd + 1).join('\n');
       }
     }
 
-    const lastMsg = msgs[msgs.length - 1];
-    let updatedMsgs = msgs;
-    if (lastMsg.role === 'assistant') {
-      updatedMsgs = msgs.slice(0, -2); // remove both user and assistant
-    } else if (lastMsg.role === 'user') {
-      updatedMsgs = msgs.slice(0, -1); // remove user
-    }
+    const updatedMsgs = msgs.slice(0, targetUserMsgIdx);
 
     // Force system prompt to stay
     if (updatedMsgs.length === 0 || updatedMsgs[0].role !== 'system') {
@@ -425,8 +614,8 @@ export default function Chat({ lang }: { lang: Language }) {
 
     setConversations(updated);
     localStorage.setItem('orca_conversations', JSON.stringify(updated));
-    setInput(lastUserPrompt);
-    // Autofocus textarea after rollback
+    setInput(targetUserPrompt);
+    // Autofocus textarea
     setTimeout(() => {
       textareaRef.current?.focus();
     }, 100);
@@ -450,33 +639,148 @@ export default function Chat({ lang }: { lang: Language }) {
         accept=".txt,.js,.json,.ts,.tsx,.css,.html,.md,.py,.go,.java,.cpp,.c,.rs"
       />
 
-      {/* Left conversation sidebar */}
-      <div className="w-[200px] flex flex-col gap-4 border-r border-[var(--color-border-base)] pr-4 h-full shrink-0">
+      {/* Left Workspace Sidebar */}
+      <div className="w-14 flex flex-col items-center gap-3 border-r border-[var(--color-border-base)] pr-3 h-full shrink-0 pt-1">
+        {workspaces.map(ws => {
+          const isActive = ws.id === activeWorkspaceId;
+          return (
+            <button 
+              key={ws.id}
+              onClick={() => setActiveWorkspaceId(ws.id)}
+              className={getWorkspaceStyles(ws.name, isActive)}
+              title={`${ws.name} (${ws.path})`}
+            >
+              {ws.initial}
+            </button>
+          );
+        })}
+        <button 
+          onClick={() => handleChooseDirectory()}
+          className="w-10 h-10 rounded-[10px] flex items-center justify-center text-xl font-light transition-all cursor-pointer border border-[var(--color-border-base)] text-gray-400 dark:text-gray-500 hover:text-[var(--color-text-primary)] hover:border-gray-400 bg-[var(--color-bg-card)] shadow-sm select-none"
+          title={lang === 'en' ? 'Choose directory' : '选择目录'}
+        >
+          +
+        </button>
+      </div>
+
+      {/* Middle conversation sidebar */}
+      <div 
+        style={{ width: `${historySidebarWidth}px` }}
+        className="relative flex flex-col gap-3.5 border-r border-[var(--color-border-base)] pr-4 h-full shrink-0 pt-1"
+      >
+        {/* Resize Handle */}
+        <div 
+          onMouseDown={handleMouseDown}
+          className="absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[var(--color-primary)]/40 active:bg-[var(--color-primary)]/60 transition-colors z-30"
+          title="Drag to resize / 拖动调整大小"
+        />
+        {activeWorkspace && (
+          <div className="px-2 select-none flex flex-col gap-0.5 relative">
+            <div className="flex items-center justify-between">
+              <span className="text-base font-bold text-[var(--color-text-primary)] truncate">
+                {activeWorkspace.name}
+              </span>
+              <button 
+                onClick={() => setWorkspaceMenuOpen(!workspaceMenuOpen)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                title={lang === 'en' ? 'Workspace Menu' : '工作区菜单'}
+              >
+                <span className="text-lg font-bold leading-none">...</span>
+              </button>
+            </div>
+            <div className="text-[11px] text-[var(--color-text-muted)] truncate font-mono" title={activeWorkspace.path}>
+              {activeWorkspace.path}
+            </div>
+
+            {workspaceMenuOpen && (
+              <div 
+                className="absolute top-8 right-0 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] rounded-xl shadow-lg z-50 w-36 py-1 text-left"
+                onMouseLeave={() => setWorkspaceMenuOpen(false)}
+              >
+                <div 
+                  onClick={() => {
+                    handleChooseDirectory(activeWorkspaceId);
+                    setWorkspaceMenuOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs hover:bg-[var(--color-bg-hover)] text-gray-700 dark:text-gray-300 cursor-pointer"
+                >
+                  {lang === 'en' ? 'Edit' : '编辑'}
+                </div>
+                <div 
+                  onClick={() => {
+                    setWorkspaceMenuOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs hover:bg-[var(--color-bg-hover)] text-gray-700 dark:text-gray-300 cursor-pointer"
+                >
+                  {lang === 'en' ? 'Enable Workspace' : '启用工作区'}
+                </div>
+                <div 
+                  onClick={() => {
+                    if (activeChat) {
+                      const systemMsg = activeChat.messages.find(m => m.role === 'system');
+                      const updated = conversations.map(c => {
+                        if (c.id === activeId) {
+                          return { ...c, messages: systemMsg ? [systemMsg] : [{ role: 'system', content: presets.standard.systemPrompt }] };
+                        }
+                        return c;
+                      });
+                      saveChatsToStorage(updated);
+                    }
+                    setWorkspaceMenuOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs hover:bg-[var(--color-bg-hover)] text-gray-700 dark:text-gray-300 cursor-pointer"
+                >
+                  {lang === 'en' ? 'Clear Notifications' : '清除通知'}
+                </div>
+                <div className="border-t border-[var(--color-border-base)] my-1" />
+                <div 
+                  onClick={() => {
+                    setWorkspaces(prev => {
+                      const updated = prev.filter(w => w.id !== activeWorkspaceId);
+                      localStorage.setItem('orca_workspaces', JSON.stringify(updated));
+                      if (updated.length > 0) {
+                        setActiveWorkspaceId(updated[0].id);
+                      } else {
+                        setActiveWorkspaceId('');
+                      }
+                      return updated;
+                    });
+                    setWorkspaceMenuOpen(false);
+                  }}
+                  className="px-4 py-2 text-xs hover:bg-[var(--color-bg-hover)] text-red-500 cursor-pointer"
+                >
+                  {lang === 'en' ? 'Close' : '关闭'}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
         <button 
           onClick={handleNewChat}
-          className="flex items-center justify-center gap-2 w-full py-2 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white text-xs font-bold rounded-xl shadow-sm transition-all cursor-pointer"
+          className="flex items-center justify-center gap-1.5 w-full py-2 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-primary)] text-sm font-semibold rounded-lg shadow-sm transition-all cursor-pointer mt-1"
         >
-          <Plus className="w-4 h-4" /> {t('chat.new', lang)}
+          <PenSquareIcon className="w-4 h-4 text-gray-500" />
+          <span>{lang === 'en' ? 'New Chat' : '新建会话'}</span>
         </button>
 
-        <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-          <div className="text-[10px] font-bold text-[var(--color-text-muted)] uppercase tracking-wider px-2 mb-2">{t('chat.history', lang)}</div>
-          {conversations.map(chat => {
+        <div className="flex-1 overflow-y-auto space-y-1 pr-1 mt-2">
+          {filteredConversations.map(chat => {
             const isActive = chat.id === activeId;
             return (
               <div 
                 key={chat.id}
                 onClick={() => setActiveId(chat.id)}
-                className={`group flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold cursor-pointer transition-all ${
+                className={`group flex items-center justify-between px-3 py-2.5 rounded-lg text-xs font-medium cursor-pointer transition-all ${
                   isActive 
-                    ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)] font-bold' 
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-primary)]'
+                    ? 'bg-[#eaeff2] dark:bg-slate-800 text-[var(--color-text-primary)] font-semibold' 
+                    : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
-                <div className="truncate flex-1 pr-2">{chat.title}</div>
+                <div className="truncate flex-1 pr-2 text-[13px]">{chat.title}</div>
                 <button 
                   onClick={(e) => handleDeleteChat(chat.id, e)}
-                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 transition-opacity p-0.5"
+                  className="opacity-0 group-hover:opacity-100 hover:text-red-500 text-gray-400 transition-opacity p-0.5"
                   title={t('chat.delete.tooltip', lang)}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -495,32 +799,25 @@ export default function Chat({ lang }: { lang: Language }) {
           <div className="mb-4 flex items-center justify-between shrink-0 bg-[var(--color-bg-base)] border-b border-[var(--color-border-base)]/50 pb-3">
             <div>
               <h2 className="text-xl font-bold tracking-tight text-[var(--color-text-primary)]">{activeChat.title}</h2>
-              <div className="flex items-center gap-2 mt-1 text-[11px] text-[var(--color-text-secondary)]">
-                <span className="bg-[var(--color-bg-hover)] px-2 py-0.5 rounded border border-[var(--color-border-base)] font-bold text-[10px]">
-                  {presets[activeChat.preset]?.name}
+              <div className="flex items-center gap-2 mt-1 text-[11px] text-[var(--color-text-secondary)] select-none">
+                <span className="bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-gray-300 px-2.5 py-0.5 rounded-md font-medium text-[10.5px]">
+                  {useAgent 
+                    ? (lang === 'en' ? 'Agent Assistant (Build)' : '智能体助手 (Build)') 
+                    : (presets[activeChat.preset]?.name ? presets[activeChat.preset]?.name.split(' (')[0] + ' (Plan)' : 'Plan')
+                  }
                 </span>
-                <span className="bg-[var(--color-bg-hover)] px-2 py-0.5 rounded border border-[var(--color-border-base)] font-bold text-[10px]">
-                  {qualities[activeChat.quality]?.name}
+                <span className="bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-gray-300 px-2.5 py-0.5 rounded-md font-medium text-[10.5px]">
+                  {(qualities[activeChat.quality] || qualities.high).name}
                 </span>
-                <span className="truncate max-w-[200px] font-mono text-[var(--color-text-muted)]">
+                <span className="font-mono text-gray-400 dark:text-gray-500 text-[10.5px] truncate max-w-[200px]">
                   {activeChat.model}
                 </span>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              {activeChat.messages.length > 1 && (
-                <button 
-                  onClick={handleRollback}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] text-xs font-semibold text-[var(--color-text-secondary)] hover:text-red-500 transition-colors cursor-pointer"
-                  title={lang === 'en' ? 'Rollback last turn' : '回滚上一次对话'}
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>{lang === 'en' ? 'Rollback' : '回滚'}</span>
-                </button>
-              )}
               <button 
                 onClick={() => navigate('/providers')}
-                className="p-2 rounded-xl border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-white dark:bg-slate-900 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors text-gray-500 shadow-sm cursor-pointer"
                 title={lang === 'en' ? 'Provider & Model Settings' : '模型供应商设置'}
               >
                 <Settings2 className="w-4 h-4" />
@@ -531,7 +828,7 @@ export default function Chat({ lang }: { lang: Language }) {
 
         {/* Message history */}
         <div className="flex-1 overflow-y-auto mb-4 bg-[var(--color-bg-base)] rounded-xl pr-2 space-y-6">
-          {activeChat?.messages.map((msg, i) => (
+          {activeChat?.messages.filter(msg => msg.role !== 'system').map((msg, i) => (
             <div key={i} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
               {msg.role !== 'system' && (
                 <div className={`w-10 h-10 shrink-0 rounded-2xl flex items-center justify-center shadow-sm ${
@@ -557,32 +854,40 @@ export default function Chat({ lang }: { lang: Language }) {
                         {parseAssistantMessage(msg.content).map((block, idx) => {
                           if (block.type === 'text') {
                             return (
-                              <div key={idx} className="whitespace-pre-wrap">
-                                {block.content}
+                              <div key={idx} className="space-y-1">
+                                {parseTextWithCodeBlocksAndTasks(block.content).map((subBlock, sIdx) => {
+                                  if (subBlock.type === 'text') {
+                                    return (
+                                      <div key={sIdx} className="whitespace-pre-wrap">
+                                        {subBlock.content}
+                                      </div>
+                                    );
+                                  } else if (subBlock.type === 'tasks' && subBlock.tasks) {
+                                    return (
+                                      <TaskListWidget 
+                                        key={sIdx}
+                                        tasks={subBlock.tasks}
+                                      />
+                                    );
+                                  } else {
+                                    return (
+                                      <CodeBlock 
+                                        key={sIdx} 
+                                        content={subBlock.content} 
+                                        language={subBlock.language} 
+                                      />
+                                    );
+                                  }
+                                })}
                               </div>
                             );
                           } else {
                             return (
-                              <div key={idx} className="my-3 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-md">
-                                <div className="flex items-center justify-between px-4 py-2 bg-gray-900 text-gray-400 text-xs font-mono select-none">
-                                  <div className="flex items-center gap-2">
-                                    <Terminal className="w-3.5 h-3.5 text-blue-400" />
-                                    <span>Agent Tool Execution: <strong className="text-white">{block.toolName}</strong></span>
-                                  </div>
-                                  {block.status === 'running' ? (
-                                    <span className="flex items-center gap-1 text-yellow-400 animate-pulse">
-                                      <Loader className="w-3 h-3 animate-spin" /> {lang === 'en' ? 'running...' : '正在执行...'}
-                                    </span>
-                                  ) : (
-                                    <span className="flex items-center gap-1 text-green-400">
-                                      <CheckCircle className="w-3 h-3 text-green-400" /> {lang === 'en' ? 'success' : '执行完成'}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="p-3 bg-black font-mono text-xs text-green-400 overflow-x-auto max-h-60 whitespace-pre">
-                                  {block.content || (block.status === 'running' ? 'Initializing subprocess stdout pipe...' : 'No output returned')}
-                                </div>
-                              </div>
+                              <ToolExecutionBlock 
+                                key={idx} 
+                                block={block} 
+                                lang={lang} 
+                              />
                             );
                           }
                         })}
@@ -590,19 +895,34 @@ export default function Chat({ lang }: { lang: Language }) {
                     )}
                   </div>
                 )}
-                {!isLoading && msg.role !== 'system' && i === (activeChat?.messages?.length || 0) - 1 && (
-                  <div className={`flex mt-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <button 
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRollback();
-                      }}
-                      className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-red-500 font-semibold transition-colors bg-transparent border-0 cursor-pointer select-none"
-                      title={lang === 'en' ? 'Rollback last message' : '回退并重新编辑'}
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      <span>{lang === 'en' ? 'Rollback' : '回退/编辑'}</span>
-                    </button>
+                {msg.role !== 'system' && (
+                  <div className={`flex items-center justify-between text-[11px] text-[var(--color-text-muted)] mt-1.5 px-1 select-none w-full gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
+                    <div className="flex items-center gap-1 font-medium">
+                      <span>{useAgent ? 'Build' : 'Plan'}</span>
+                      <span>·</span>
+                      <span className="truncate max-w-[150px]">{activeChat.model}</span>
+                      <span>·</span>
+                      <span>{msg.timestamp || '22:29'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-gray-400 dark:text-gray-500">
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); rollbackTo(i); }}
+                        className="hover:text-red-500 transition-colors p-0.5 cursor-pointer"
+                        title={lang === 'en' ? 'Rollback to this point' : '回滚/编辑'}
+                      >
+                        <CornerUpLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard.writeText(msg.content);
+                        }}
+                        className="hover:text-[var(--color-text-primary)] transition-colors p-0.5 cursor-pointer"
+                        title={lang === 'en' ? 'Copy content' : '复制内容'}
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -682,26 +1002,17 @@ export default function Chat({ lang }: { lang: Language }) {
             />
             
             <div className="flex items-center justify-between p-3 pt-1">
-              <div className="flex items-center gap-1">
-                <button 
-                  onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-                  className="w-9 h-9 flex items-center justify-center rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
-                  title={t('chat.file.tooltip', lang)}
-                >
-                  <Paperclip className="w-5 h-5" />
-                </button>
-                <button 
-                  onClick={(e) => { e.stopPropagation(); setIsRecording(true); }}
-                  className="w-9 h-9 flex items-center justify-center rounded-xl text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
-                  title={t('chat.voice.tooltip', lang)}
-                >
-                  <Mic className="w-5 h-5" />
-                </button>
-              </div>
+              <button 
+                onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                className="w-9 h-9 flex items-center justify-center rounded-xl text-gray-400 hover:text-gray-600 transition-colors cursor-pointer text-xl font-light"
+                title={t('chat.file.tooltip', lang)}
+              >
+                +
+              </button>
               <button 
                 onClick={(e) => { e.stopPropagation(); handleSend(); }}
                 disabled={(!input.trim() && !attachedFile) || isLoading || !activeChat}
-                className="w-9 h-9 flex items-center justify-center rounded-xl bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:bg-[var(--color-primary)] hover:text-white disabled:opacity-50 transition-all duration-200 cursor-pointer"
+                className="w-9 h-9 flex items-center justify-center rounded-lg bg-[#b2b8b4] text-white hover:opacity-90 disabled:opacity-40 transition-all duration-200 cursor-pointer"
               >
                 <ArrowUp className="w-5 h-5" />
               </button>
@@ -710,165 +1021,133 @@ export default function Chat({ lang }: { lang: Language }) {
           
           {/* Bottom Dropdowns */}
           {activeChat && (
-            <div ref={dropdownsRef} className="flex items-center flex-wrap gap-4 px-2 select-none relative z-30">
+            <div ref={dropdownsRef} className="flex items-center gap-2 px-2 select-none relative z-30">
               
-              {/* Agent Mode Toggle Switch */}
-              <div className="flex items-center gap-2 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] px-2.5 py-1.5 rounded-lg shadow-sm">
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input 
-                    type="checkbox" 
-                    className="sr-only peer" 
-                    checked={useAgent}
-                    onChange={e => setUseAgent(e.target.checked)}
-                  />
-                  <div className="w-9 h-5 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:bg-gray-700 peer-checked:bg-[var(--color-primary)]"></div>
-                </label>
-                <span className="text-xs font-semibold text-[var(--color-text-secondary)]">{t('chat.agentMode', lang)}</span>
-              </div>
-
-              {/* Skill Selector Dropdown */}
-              {useAgent && (
-                <div className="relative">
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveDropdown(activeDropdown === 'skill' ? 'none' : 'skill');
-                    }}
-                    className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-card)] border border-[var(--color-border-base)] px-2.5 py-1.5 rounded-lg shadow-sm cursor-pointer"
-                  >
-                    <Bot className="w-3.5 h-3.5 text-[var(--color-primary)]" />
-                    {activeSkillId 
-                      ? (skills.find(s => s.id === activeSkillId)?.name || activeSkillId)
-                      : t('chat.skillSelect', lang)}
-                    <ChevronDown className="w-3.5 h-3.5 opacity-70" />
-                  </button>
-                  <div 
-                    onClick={(e) => e.stopPropagation()}
-                    className={`absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-64 py-1 max-h-60 overflow-y-auto ${activeDropdown === 'skill' ? 'block' : 'hidden'}`}
-                  >
-                    <div 
-                      onClick={() => {
-                        setActiveSkillId('');
-                        setActiveDropdown('none');
-                      }} 
-                      className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer truncate ${!activeSkillId ? 'text-[var(--color-primary)] font-bold' : ''}`}
-                    >
-                      {t('chat.skillSelect.none', lang)}
-                    </div>
-                    {skills.map(s => (
-                      <div 
-                        key={s.id} 
-                        onClick={() => {
-                          setActiveSkillId(s.id);
-                          setActiveDropdown('none');
-                        }} 
-                        className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex flex-col gap-0.5 ${activeSkillId === s.id ? 'text-[var(--color-primary)] font-bold' : ''}`}
-                      >
-                        <span className="font-semibold">{s.name}</span>
-                        <span className="text-[10px] text-[var(--color-text-muted)] truncate">{s.description}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Build Dropdown (Presets) */}
+              {/* Dropdown 1: Build / Plan */}
               <div className="relative">
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
-                    setActiveDropdown(activeDropdown === 'preset' ? 'none' : 'preset');
+                    setActiveDropdown(activeDropdown === 'buildPlan' ? 'none' : 'buildPlan');
                   }}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-card)] border border-[var(--color-border-base)] px-2.5 py-1.5 rounded-lg shadow-sm cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-hover)] px-3 py-1.5 rounded-lg shadow-sm cursor-pointer"
                 >
-                  Build: {presets[activeChat.preset]?.name}
-                  <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                  <span>{useAgent ? 'Build' : 'Plan'}</span>
+                  <ChevronDown className="w-3 h-3 opacity-70" />
                 </button>
-                <div 
-                  onClick={(e) => e.stopPropagation()}
-                  className={`absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-52 py-1 ${activeDropdown === 'preset' ? 'block' : 'hidden'}`}
-                >
-                  {Object.entries(presets).map(([key, val]) => (
+                {activeDropdown === 'buildPlan' && (
+                  <div 
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-36 py-1 overflow-hidden"
+                  >
                     <div 
-                      key={key} 
                       onClick={() => {
-                        handlePresetChange(key);
+                        setUseAgent(true);
                         setActiveDropdown('none');
                       }} 
-                      className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer truncate ${activeChat.preset === key ? 'text-[var(--color-primary)] font-bold' : ''}`}
+                      className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex justify-between items-center ${useAgent ? 'bg-[var(--color-bg-hover)] font-bold text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'}`}
                     >
-                      {val.name}
+                      <span>Build</span>
+                      {useAgent && <Check className="w-3.5 h-3.5" />}
                     </div>
-                  ))}
-                </div>
+                    <div 
+                      onClick={() => {
+                        setUseAgent(false);
+                        setActiveDropdown('none');
+                      }} 
+                      className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex justify-between items-center ${!useAgent ? 'bg-[var(--color-bg-hover)] font-bold text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'}`}
+                    >
+                      <span>Plan</span>
+                      {!useAgent && <Check className="w-3.5 h-3.5" />}
+                    </div>
+                  </div>
+                )}
               </div>
 
-              {/* Model Select Dropdown */}
+              {/* Dropdown 2: Model Selector */}
               <div className="relative">
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
                     setActiveDropdown(activeDropdown === 'model' ? 'none' : 'model');
                   }}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-card)] border border-[var(--color-border-base)] px-2.5 py-1.5 rounded-lg shadow-sm cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-hover)] px-3 py-1.5 rounded-lg shadow-sm cursor-pointer"
                 >
-                  <Sparkles className="w-3 h-3 text-[var(--color-primary)]" />
-                  {activeChat.model}
-                  <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                  <Sparkles className="w-3 h-3 text-amber-500 fill-amber-500/20 animate-pulse" />
+                  <span className="truncate max-w-[150px]">{activeChat.model}</span>
+                  <ChevronDown className="w-3 h-3 opacity-70" />
                 </button>
-                <div 
-                  onClick={(e) => e.stopPropagation()}
-                  className={`absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-64 py-1 max-h-60 overflow-y-auto ${activeDropdown === 'model' ? 'block' : 'hidden'}`}
-                >
-                  {models.length === 0 ? (
-                    <div className="px-3 py-2 text-xs text-[var(--color-text-muted)] italic">{t('chat.models.empty', lang)}</div>
-                  ) : (
-                    models.map(m => (
-                      <div 
-                        key={m.id} 
-                        onClick={() => {
-                          handleModelChange(m.id);
-                          setActiveDropdown('none');
-                        }} 
-                        className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer truncate flex flex-col gap-0.5 ${activeChat.model === m.id ? 'text-[var(--color-primary)] font-bold' : ''}`}
-                      >
-                        <span className="font-semibold">{m.id}</span>
-                        <span className="text-[10px] text-[var(--color-text-muted)]">{t('chat.model.provider', lang)}: {m.providerName}</span>
-                      </div>
-                    ))
-                  )}
-                </div>
+                {activeDropdown === 'model' && (
+                  <div 
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-72 py-2 max-h-80 overflow-y-auto"
+                  >
+                    {models.length === 0 ? (
+                      <div className="px-3 py-2 text-xs text-[var(--color-text-muted)] italic">{t('chat.models.empty', lang)}</div>
+                    ) : (
+                      Object.entries(modelsByProvider).map(([providerName, providerModels]) => (
+                        <div key={providerName} className="mb-2 last:mb-0">
+                          <div className="px-3 py-1.5 text-[11px] font-semibold text-[#a06a55] select-none bg-slate-50/50 dark:bg-slate-800/30">
+                            {providerName}
+                          </div>
+                          {providerModels.map(m => {
+                            const isSelected = activeChat.model === m.id;
+                            return (
+                              <div 
+                                key={m.id} 
+                                onClick={() => {
+                                  handleModelChange(m.id);
+                                  setActiveDropdown('none');
+                                }} 
+                                className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex justify-between items-center transition-colors ${isSelected ? 'bg-[var(--color-bg-hover)] font-bold text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'}`}
+                              >
+                                <span className="truncate flex-1 pr-2">{m.name || m.id}</span>
+                                {isSelected && <Check className="w-3.5 h-3.5 shrink-0" />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Quality Dropdown (Temperature) */}
+              {/* Dropdown 3: Quality Selector */}
               <div className="relative">
                 <button 
                   onClick={(e) => {
                     e.stopPropagation();
                     setActiveDropdown(activeDropdown === 'quality' ? 'none' : 'quality');
                   }}
-                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-card)] border border-[var(--color-border-base)] px-2.5 py-1.5 rounded-lg shadow-sm cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-hover)] px-3 py-1.5 rounded-lg shadow-sm cursor-pointer"
                 >
-                  Quality: {qualities[activeChat.quality]?.name}
-                  <ChevronDown className="w-3.5 h-3.5 opacity-70" />
+                  <span>{(qualities[activeChat.quality] || qualities.high).name}</span>
+                  <ChevronDown className="w-3 h-3 opacity-70" />
                 </button>
-                <div 
-                  onClick={(e) => e.stopPropagation()}
-                  className={`absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-44 py-1 ${activeDropdown === 'quality' ? 'block' : 'hidden'}`}
-                >
-                  {Object.entries(qualities).map(([key, val]) => (
-                    <div 
-                      key={key} 
-                      onClick={() => {
-                        handleQualityChange(key);
-                        setActiveDropdown('none');
-                      }} 
-                      className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer truncate ${activeChat.quality === key ? 'text-[var(--color-primary)] font-bold' : ''}`}
-                    >
-                      {val.name}
-                    </div>
-                  ))}
-                </div>
+                {activeDropdown === 'quality' && (
+                  <div 
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-36 py-1 overflow-hidden"
+                  >
+                    {Object.entries(qualities).map(([key, val]) => {
+                      const isSelected = activeChat.quality === key;
+                      return (
+                        <div 
+                          key={key} 
+                          onClick={() => {
+                            handleQualityChange(key);
+                            setActiveDropdown('none');
+                          }} 
+                          className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex justify-between items-center transition-colors ${isSelected ? 'bg-[var(--color-bg-hover)] font-bold text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'}`}
+                        >
+                          <span>{val.name}</span>
+                          {isSelected && <Check className="w-3.5 h-3.5" />}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
             </div>
@@ -926,4 +1205,262 @@ function parseAssistantMessage(content: string) {
   }
   
   return parts;
+}
+
+function CodeBlock({ content, language }: { content: string; language?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="my-4 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-sm bg-gray-50 dark:bg-slate-900 font-mono text-[13px] leading-relaxed">
+      <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-gray-400 text-xs border-b border-[var(--color-border-base)] select-none">
+        <span className="font-semibold uppercase tracking-wider">{language || 'code'}</span>
+        <button 
+          onClick={handleCopy}
+          className="flex items-center gap-1 hover:text-[var(--color-text-primary)] transition-colors px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-slate-800 text-[11px] font-semibold cursor-pointer text-gray-600 dark:text-gray-300"
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+      <pre className="p-4 overflow-x-auto max-h-[500px] whitespace-pre text-[var(--color-text-primary)]">
+        <code>{content}</code>
+      </pre>
+    </div>
+  );
+}
+
+interface TaskItem {
+  status: 'pending' | 'running' | 'completed';
+  description: string;
+}
+
+interface TaskBlock {
+  type: 'text' | 'code' | 'tasks';
+  content: string;
+  language?: string;
+  tasks?: TaskItem[];
+}
+
+function parseTextWithCodeBlocksAndTasks(text: string): TaskBlock[] {
+  const parts: TaskBlock[] = [];
+  const lines = text.split('\n');
+  let currentBlock: string[] = [];
+  let inCodeBlock = false;
+  let codeLanguage = '';
+  let currentTasks: TaskItem[] = [];
+
+  const flushCurrentTextOrTasks = () => {
+    if (currentTasks.length > 0) {
+      parts.push({
+        type: 'tasks',
+        content: '',
+        tasks: currentTasks
+      });
+      currentTasks = [];
+    } else if (currentBlock.length > 0) {
+      parts.push({
+        type: 'text',
+        content: currentBlock.join('\n')
+      });
+      currentBlock = [];
+    }
+  };
+
+  const taskRegex = /^\s*[-*+]\s+\[([ xX/])\]\s+(.*)$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.trim().startsWith('```')) {
+      if (inCodeBlock) {
+        // End of code block
+        parts.push({
+          type: 'code',
+          content: currentBlock.join('\n'),
+          language: codeLanguage
+        });
+        currentBlock = [];
+        inCodeBlock = false;
+        codeLanguage = '';
+      } else {
+        // Start of code block
+        flushCurrentTextOrTasks();
+        inCodeBlock = true;
+        codeLanguage = line.trim().slice(3).trim();
+      }
+    } else if (inCodeBlock) {
+      currentBlock.push(line);
+    } else {
+      const match = line.match(taskRegex);
+      if (match) {
+        if (currentBlock.length > 0) {
+          parts.push({
+            type: 'text',
+            content: currentBlock.join('\n')
+          });
+          currentBlock = [];
+        }
+        
+        const statusChar = match[1].toLowerCase();
+        let status: 'pending' | 'running' | 'completed' = 'pending';
+        if (statusChar === 'x') status = 'completed';
+        else if (statusChar === '/') status = 'running';
+        
+        currentTasks.push({
+          status,
+          description: match[2].trim()
+        });
+      } else if (line.trim() === '' && currentTasks.length > 0) {
+        continue;
+      } else {
+        if (currentTasks.length > 0) {
+          parts.push({
+            type: 'tasks',
+            content: '',
+            tasks: currentTasks
+          });
+          currentTasks = [];
+        }
+        currentBlock.push(line);
+      }
+    }
+  }
+
+  if (inCodeBlock) {
+    parts.push({
+      type: 'code',
+      content: currentBlock.join('\n'),
+      language: codeLanguage
+    });
+  } else {
+    flushCurrentTextOrTasks();
+  }
+
+  return parts;
+}
+
+function TaskListWidget({ tasks }: { tasks: TaskItem[] }) {
+  const total = tasks.length;
+  const completed = tasks.filter(t => t.status === 'completed').length;
+  const running = tasks.filter(t => t.status === 'running').length;
+  const percent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return (
+    <div className="my-4 p-4 border border-[var(--color-border-base)] rounded-xl bg-gray-50/50 dark:bg-slate-900/40 backdrop-blur-sm shadow-sm max-w-xl animate-in fade-in duration-300">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold uppercase tracking-wider text-[var(--color-primary)]">
+          {running > 0 ? '⚡ 任务执行中...' : (completed === total ? '✅ 任务已完成' : '📋 任务清单')}
+        </span>
+        <span className="text-xs font-mono text-[var(--color-text-muted)] font-medium">
+          {completed}/{total} ({percent}%)
+        </span>
+      </div>
+      
+      {/* Progress Bar */}
+      <div className="w-full h-1.5 bg-gray-200 dark:bg-slate-800 rounded-full overflow-hidden mb-4">
+        <div 
+          className="h-full bg-[var(--color-primary)] rounded-full transition-all duration-500" 
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+
+      <div className="space-y-2.5">
+        {tasks.map((task, idx) => {
+          const isCompleted = task.status === 'completed';
+          const isRunning = task.status === 'running';
+
+          return (
+            <div 
+              key={idx} 
+              className={`flex items-start gap-3 p-2 rounded-lg transition-all duration-300 ${
+                isRunning 
+                  ? 'bg-[var(--color-primary)]/5 border border-[var(--color-primary)]/10 shadow-sm' 
+                  : 'border border-transparent'
+              }`}
+            >
+              <div className="mt-0.5 shrink-0">
+                {isCompleted && (
+                  <span className="w-4 h-4 rounded-full bg-green-500 text-white flex items-center justify-center text-[10px] font-bold select-none shadow-sm">
+                    ✓
+                  </span>
+                )}
+                {isRunning && (
+                  <span className="w-4 h-4 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center text-[10px] font-bold select-none animate-spin shadow-sm">
+                    ↻
+                  </span>
+                )}
+                {!isCompleted && !isRunning && (
+                  <span className="w-4 h-4 rounded-full border-2 border-gray-300 dark:border-gray-600 bg-transparent flex items-center justify-center select-none" />
+                )}
+              </div>
+              <div className={`text-xs leading-relaxed ${
+                isCompleted 
+                  ? 'text-[var(--color-text-muted)] line-through decoration-gray-400 dark:decoration-gray-600' 
+                  : (isRunning ? 'text-[var(--color-text-primary)] font-semibold animate-pulse' : 'text-[var(--color-text-secondary)]')
+              }`}>
+                {task.description}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ToolExecutionBlock({ block, lang }: { block: any; lang: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const isRunning = block.status === 'running';
+
+  return (
+    <div className="my-3 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm bg-slate-900 text-slate-100 transition-all duration-300">
+      {/* Header (Acts as Toggle Button) */}
+      <div 
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center justify-between px-4 py-2.5 bg-slate-800/90 hover:bg-slate-800 text-slate-300 text-xs font-mono select-none cursor-pointer border-b border-slate-700/50 transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <Terminal className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
+          <span>
+            {lang === 'en' ? 'Agent Tool:' : '智能体工具:'} <strong className="text-white">{block.toolName}</strong>
+          </span>
+        </div>
+        
+        <div className="flex items-center gap-3">
+          {/* Status badge */}
+          {isRunning ? (
+            <span className="flex items-center gap-1 text-yellow-400 font-semibold animate-pulse">
+              <Loader className="w-3 h-3 animate-spin" /> {lang === 'en' ? 'Running' : '执行中'}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-green-400 font-semibold">
+              <CheckCircle className="w-3 h-3 text-green-400" /> {lang === 'en' ? 'Success' : '完成'}
+            </span>
+          )}
+          
+          {/* Collapse/Expand Toggle Indicator */}
+          <span className="text-[10px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded border border-slate-700/50 flex items-center gap-1 hover:text-white transition-colors">
+            {isExpanded ? (lang === 'en' ? 'Collapse' : '收起') : (lang === 'en' ? 'Expand' : '展开')}
+            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+          </span>
+        </div>
+      </div>
+
+      {/* Terminal Content (Visible only when expanded) */}
+      {isExpanded && (
+        <div className="p-4 bg-slate-950/90 font-mono text-[12px] leading-relaxed text-emerald-400 overflow-x-auto max-h-72 border-t border-slate-900 animate-in slide-in-from-top-2 duration-200">
+          <div className="text-slate-500 mb-1 select-none">$ {block.toolName} --run</div>
+          <pre className="whitespace-pre">
+            {block.content || (isRunning ? 'Initializing subprocess stdout pipe...' : 'No output returned')}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
 }

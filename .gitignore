@@ -2,7 +2,8 @@ node_modules/
 dist/
 .env
 data/config.json
-release/
+release/*
+!release/*.exe
 __pycache__/
 *.py[cod]
 .DS_Store
