@@ -709,35 +709,48 @@ function logDailyBilling(model: string, tokens: number) {
 }
 
 function seedBillingFile() {
-  if (!fs.existsSync(BILLING_FILE)) {
+  const needsReSeed = !fs.existsSync(BILLING_FILE) || !fs.readFileSync(BILLING_FILE, "utf-8").includes("deepseek-chat");
+  if (needsReSeed) {
     const mockBilling = {
       "2026-06-01": {
         "mimo-v2.5": 50000,
         "mimo-v2.5-pro": 120000,
-        "mimo-v2-omni": 10000
+        "mimo-v2-omni": 10000,
+        "deepseek-chat": 35000,
+        "gpt-4o": 25000,
+        "claude-3-5-sonnet": 15000
       },
       "2026-06-02": {
         "mimo-v2.5": 0,
         "mimo-v2.5-pro": 76852941,
-        "mimo-v2-omni": 0
+        "mimo-v2-omni": 0,
+        "deepseek-chat": 0,
+        "gpt-4o": 0,
+        "claude-3-5-sonnet": 0
       },
       "2026-06-03": {
         "mimo-v2.5": 200000,
         "mimo-v2.5-pro": 450000,
-        "mimo-v2-omni": 30000
+        "mimo-v2-omni": 30000,
+        "deepseek-chat": 150000,
+        "gpt-4o": 80000,
+        "claude-3-5-sonnet": 50000
       },
       "2026-06-04": {
         "mimo-v2.5": 1250000,
         "mimo-v2.5-pro": 10562768,
-        "mimo-v2-omni": 1800000
+        "mimo-v2-omni": 1800000,
+        "deepseek-chat": 800000,
+        "gpt-4o": 350000,
+        "claude-3-5-sonnet": 200000
       }
     };
     try {
       const parentDir = path.dirname(BILLING_FILE);
       if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
       fs.writeFileSync(BILLING_FILE, JSON.stringify(mockBilling, null, 2), "utf-8");
-      stats.totalTokens = 90565709;
-      stats.totalCost = 45.2828;
+      stats.totalTokens = 93030709;
+      stats.totalCost = 46.5153;
     } catch (e) {}
   } else {
     try {

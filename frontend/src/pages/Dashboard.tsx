@@ -89,10 +89,11 @@ export default function Dashboard({ lang }: DashboardProps) {
       return {
         name: model,
         type: 'bar' as const,
+        stack: 'total',
         barWidth: '35%',
         itemStyle: {
           color: getModelColor(model, idx),
-          borderRadius: [4, 4, 0, 0]
+          borderRadius: idx === modelsList.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
         },
         data
       };

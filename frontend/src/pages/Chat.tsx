@@ -659,7 +659,7 @@ export default function Chat({ lang }: { lang: Language }) {
   };
 
   return (
-    <div className="flex h-[calc(100vh-64px)] gap-6 animate-in fade-in duration-500 max-w-6xl mx-auto overflow-hidden">
+    <div className="flex h-[calc(100vh-64px)] gap-6 animate-in fade-in duration-500 w-full overflow-hidden">
       
       {/* Hidden File Input */}
       <input 

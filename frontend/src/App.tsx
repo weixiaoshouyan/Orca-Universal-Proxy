@@ -187,7 +187,7 @@ function App() {
           isCollapsed={isCollapsed}
           toggleCollapse={toggleCollapse}
         />
-        <main className={`flex-1 px-10 py-8 text-[var(--color-text-primary)] min-h-screen max-w-7xl mx-auto transition-all duration-300 ${
+        <main className={`flex-1 px-10 py-8 text-[var(--color-text-primary)] min-h-screen transition-all duration-300 ${
           isCollapsed ? 'ml-[72px]' : 'ml-[240px]'
         }`}>
           <Routes>
