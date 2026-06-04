@@ -62,3 +62,16 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-muted);
 }
+
+@keyframes loading-bar {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(333%);
+  }
+}
+
+.animate-loading-bar {
+  animation: loading-bar 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}

@@ -17,7 +17,7 @@ export const api = axios.create({
 });
 
 // Helper for SSE streams
-export async function fetchEventSource(url: string, body: any, onMessage: (data: string) => void, onDone: () => void, onError: (err: any) => void) {
+export async function fetchEventSource(url: string, body: any, onMessage: (data: string) => void, onDone: () => void, onError: (err: any) => void, signal?: AbortSignal) {
   try {
     const response = await fetch(`http://127.0.0.1:18080${url}`, {
       method: 'POST',
@@ -25,7 +25,8 @@ export async function fetchEventSource(url: string, body: any, onMessage: (data:
         'Content-Type': 'application/json',
         ...(token ? { 'x-local-token': token } : {})
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy } from 'lucide-react';
+import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy, Brain } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, fetchEventSource } from '../api';
 import { translate as t } from '../i18n';
@@ -50,6 +50,23 @@ export default function Chat({ lang }: { lang: Language }) {
   const [models, setModels] = useState<{ id: string; name: string; providerName: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'skill' | 'buildPlan'>('none');
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
   
   // Agent mode & skills state
   const [useAgent, setUseAgent] = useState(true);
@@ -515,6 +532,9 @@ export default function Chat({ lang }: { lang: Language }) {
       workspacePath: activeWorkspace?.path || ''
     };
 
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     await fetchEventSource('/v1/chat/completions', body, 
       (data) => {
         try {
@@ -543,8 +563,17 @@ export default function Chat({ lang }: { lang: Language }) {
           }
         } catch(e) {}
       },
-      () => setIsLoading(false),
+      () => {
+        setIsLoading(false);
+        abortControllerRef.current = null;
+      },
       (err) => {
+        if (err.name === 'AbortError') {
+          console.log('Request aborted by user');
+          setIsLoading(false);
+          abortControllerRef.current = null;
+          return;
+        }
         console.error(err);
         setConversations(prev => {
           const updated = prev.map(c => {
@@ -565,7 +594,9 @@ export default function Chat({ lang }: { lang: Language }) {
           return updated;
         });
         setIsLoading(false);
-      }
+        abortControllerRef.current = null;
+      },
+      controller.signal
     );
   };
 
@@ -826,6 +857,13 @@ export default function Chat({ lang }: { lang: Language }) {
           </div>
         )}
 
+        {/* Dynamic Loading Bar at the top of chat interface */}
+        {isLoading && (
+          <div className="w-full h-1 relative overflow-hidden bg-gray-100 dark:bg-slate-800/50 shrink-0 mb-3 rounded-full">
+            <div className="absolute top-0 left-0 h-full w-full bg-gradient-to-r from-blue-500 via-emerald-500 to-indigo-500 animate-loading-bar rounded-full"></div>
+          </div>
+        )}
+
         {/* Message history */}
         <div className="flex-1 overflow-y-auto mb-4 bg-[var(--color-bg-base)] rounded-xl pr-2 space-y-6">
           {activeChat?.messages.filter(msg => msg.role !== 'system').map((msg, i) => (
@@ -880,6 +918,15 @@ export default function Chat({ lang }: { lang: Language }) {
                                   }
                                 })}
                               </div>
+                            );
+                          } else if (block.type === 'think') {
+                            return (
+                              <ThinkingBlock 
+                                key={idx} 
+                                content={block.content} 
+                                status={block.status} 
+                                lang={lang}
+                              />
                             );
                           } else {
                             return (
@@ -1010,11 +1057,29 @@ export default function Chat({ lang }: { lang: Language }) {
                 +
               </button>
               <button 
-                onClick={(e) => { e.stopPropagation(); handleSend(); }}
-                disabled={(!input.trim() && !attachedFile) || isLoading || !activeChat}
-                className="w-9 h-9 flex items-center justify-center rounded-lg bg-[#b2b8b4] text-white hover:opacity-90 disabled:opacity-40 transition-all duration-200 cursor-pointer"
+                onClick={(e) => { 
+                  e.stopPropagation(); 
+                  if (isLoading) {
+                    handleStop(); 
+                  } else {
+                    handleSend(); 
+                  }
+                }}
+                disabled={!isLoading && ((!input.trim() && !attachedFile) || !activeChat)}
+                className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-250 cursor-pointer ${
+                  isLoading 
+                    ? 'bg-red-500 text-white shadow-md shadow-red-500/20 animate-pulse' 
+                    : (!input.trim() && !attachedFile) || !activeChat
+                      ? 'bg-gray-100 dark:bg-slate-800/80 text-gray-400 dark:text-gray-600 cursor-not-allowed'
+                      : 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
+                }`}
+                title={isLoading ? (lang === 'en' ? 'Stop' : '停止运行') : (lang === 'en' ? 'Send' : '发送')}
               >
-                <ArrowUp className="w-5 h-5" />
+                {isLoading ? (
+                  <Square className="w-4 h-4 fill-white" />
+                ) : (
+                  <ArrowUp className="w-5 h-5" />
+                )}
               </button>
             </div>
           </div>
@@ -1159,6 +1224,37 @@ export default function Chat({ lang }: { lang: Language }) {
 }
 
 function parseAssistantMessage(content: string) {
+  const parts: { type: 'text' | 'tool' | 'think'; content: string; toolName?: string; status?: 'done' | 'running' }[] = [];
+  
+  // Parse think blocks first
+  const thinkStart = content.indexOf('<think>');
+  if (thinkStart >= 0) {
+    const textBefore = content.substring(0, thinkStart);
+    if (textBefore.trim()) {
+      parts.push(...parseToolsAndText(textBefore));
+    }
+    
+    const thinkEnd = content.indexOf('</think>', thinkStart);
+    if (thinkEnd >= 0) {
+      const thinkContent = content.substring(thinkStart + 7, thinkEnd);
+      parts.push({ type: 'think', content: thinkContent, status: 'done' });
+      
+      const textAfter = content.substring(thinkEnd + 8);
+      if (textAfter.trim()) {
+        parts.push(...parseToolsAndText(textAfter));
+      }
+    } else {
+      const thinkContent = content.substring(thinkStart + 7);
+      parts.push({ type: 'think', content: thinkContent, status: 'running' });
+    }
+  } else {
+    parts.push(...parseToolsAndText(content));
+  }
+  
+  return parts;
+}
+
+function parseToolsAndText(content: string) {
   const parts: { type: 'text' | 'tool'; content: string; toolName?: string; status?: 'done' | 'running' }[] = [];
   const toolSplitter = /> 🔧 \*\*Agent Executing Tool:\*\* `(.*?)`\.\.\./g;
   let lastIndex = 0;
@@ -1205,6 +1301,33 @@ function parseAssistantMessage(content: string) {
   }
   
   return parts;
+}
+
+function ThinkingBlock({ content, status, lang }: { content: string; status?: 'done' | 'running'; lang: Language }) {
+  const [isExpanded, setIsExpanded] = useState(true);
+  
+  return (
+    <div className="my-3 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-sm bg-gray-50/50 dark:bg-slate-900/30">
+      <div 
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center justify-between px-4 py-2.5 bg-gray-100/70 dark:bg-slate-800/40 text-gray-500 dark:text-gray-400 text-xs border-b border-[var(--color-border-base)] select-none cursor-pointer hover:bg-gray-100 dark:hover:bg-slate-800/60 transition-colors"
+      >
+        <div className="flex items-center gap-2 font-semibold">
+          <Brain className={`w-4 h-4 text-purple-500 ${status === 'running' ? 'animate-pulse' : ''}`} />
+          <span>{lang === 'en' ? 'Thinking Process' : '思考过程'}</span>
+          {status === 'running' && <span className="flex h-1.5 w-1.5 relative"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-purple-500"></span></span>}
+        </div>
+        <button className="text-[11px] font-semibold text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+          {isExpanded ? (lang === 'en' ? 'Collapse' : '收起') : (lang === 'en' ? 'Expand' : '展开')}
+        </button>
+      </div>
+      {isExpanded && (
+        <div className="p-4 text-xs font-mono whitespace-pre-wrap text-gray-600 dark:text-gray-300 leading-relaxed max-h-[300px] overflow-y-auto bg-white/30 dark:bg-slate-950/20 italic">
+          {content || (lang === 'en' ? 'Thinking...' : '正在思考...')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function CodeBlock({ content, language }: { content: string; language?: string }) {
