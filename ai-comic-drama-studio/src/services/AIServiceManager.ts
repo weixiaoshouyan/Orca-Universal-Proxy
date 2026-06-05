@@ -1,4 +1,5 @@
 import { AIModelConfig } from '../types';
+import { getAIModelConfig } from '../config';
 
 export interface AITextRequest {
   prompt: string;
@@ -31,8 +32,8 @@ export interface AIResponse<T> {
 export class AIServiceManager {
   private config: AIModelConfig;
 
-  constructor(config: AIModelConfig) {
-    this.config = config;
+  constructor(config?: AIModelConfig) {
+    this.config = config || getAIModelConfig();
   }
 
   getConfig(): AIModelConfig {
