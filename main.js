@@ -87,8 +87,8 @@ function startServer() {
     process.env.ORCA_BASE_DIR = app.getPath('userData');
 
     const appPath = app.getAppPath();
-    const isAsar = appPath.includes('app.asar');
-    const skillsSrcDir = isAsar 
+    const isAppAsar = appPath.includes('app.asar');
+    const skillsSrcDir = isAppAsar 
       ? path.join(appPath, '..', 'app.asar.unpacked', 'skills') 
       : path.join(appPath, 'skills');
 
