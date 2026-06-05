@@ -115,4 +115,8 @@ export async function replayStreamResponse(
     res.write(`data: ${JSON.stringify(chunk)}\n\n`);
     index++;
   }, 30); // 30ms per word chunk simulation
+
+  res.on("close", () => {
+    clearInterval(interval);
+  });
 }

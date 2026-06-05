@@ -546,67 +546,38 @@ export default function Chat({ lang }: { lang: Language }) {
     const controller = new AbortController();
     abortControllersRef.current[chatId] = controller;
 
-    let accumulatedContent = '';
-    let lastRenderTime = Date.now();
-    let renderTimeout: any = null;
-
-    const flushRender = (force = false) => {
-      const now = Date.now();
-      if (!force && now - lastRenderTime < 80) {
-        if (!renderTimeout) {
-          renderTimeout = setTimeout(() => {
-            renderTimeout = null;
-            flushRender(true);
-          }, 80 - (now - lastRenderTime));
-        }
-        return;
-      }
-
-      if (renderTimeout) {
-        clearTimeout(renderTimeout);
-        renderTimeout = null;
-      }
-
-      lastRenderTime = now;
-      
-      setConversations(prev => {
-        const updated = prev.map(c => {
-          if (c.id === chatId) {
-            const msgs = [...c.messages];
-            if (msgs[assistantIndex]) {
-              msgs[assistantIndex] = {
-                role: 'assistant',
-                content: accumulatedContent,
-                timestamp: msgs[assistantIndex].timestamp || timeStr
-              };
-            }
-            return { ...c, messages: msgs };
-          }
-          return c;
-        });
-        localStorage.setItem('orca_conversations', JSON.stringify(updated));
-        return updated;
-      });
-    };
-
     await fetchEventSource('/v1/chat/completions', body, 
       (data) => {
         try {
           const parsed = JSON.parse(data);
           const delta = parsed.choices?.[0]?.delta?.content || '';
           if (delta) {
-            accumulatedContent += delta;
-            flushRender();
+            setConversations(prev => {
+              const updated = prev.map(c => {
+                if (c.id === chatId) {
+                  const msgs = [...c.messages];
+                  if (msgs[assistantIndex]) {
+                    msgs[assistantIndex] = {
+                      role: 'assistant',
+                      content: msgs[assistantIndex].content + delta,
+                      timestamp: msgs[assistantIndex].timestamp || timeStr
+                    };
+                  }
+                  return { ...c, messages: msgs };
+                }
+                return c;
+              });
+              localStorage.setItem('orca_conversations', JSON.stringify(updated));
+              return updated;
+            });
           }
         } catch(e) {}
       },
       () => {
-        flushRender(true);
         setLoadingChats(prev => ({ ...prev, [chatId]: false }));
         delete abortControllersRef.current[chatId];
       },
       (err) => {
-        flushRender(true);
         if (err.name === 'AbortError') {
           console.log('Request aborted by user');
           setLoadingChats(prev => ({ ...prev, [chatId]: false }));

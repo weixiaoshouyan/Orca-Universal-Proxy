@@ -790,6 +790,7 @@ app.post("/v1/responses", async (req, res) => {
 // ---- Claude Desktop: POST /v1/messages ----
 
 app.post("/v1/messages", async (req, res) => {
+  req.socket.setTimeout(0); // Disable socket timeout for streaming agent loop
   const startTime = Date.now();
   stats.claudeRequests++;
   try {
@@ -1569,7 +1570,19 @@ async function executeAgentCompletions(
   }
 
   if (body.stream) {
-    const upstreamResp = await fetch(targetUrl, { method: "POST", headers, body: reqBodyText });
+    // Keep connection alive with periodic pings while fetching upstream
+    const fetchKeepAlive = setInterval(() => {
+      if (!res.writableEnded) {
+        res.write(": keep-alive\n\n");
+      }
+    }, 15000);
+
+    let upstreamResp;
+    try {
+      upstreamResp = await fetch(targetUrl, { method: "POST", headers, body: reqBodyText });
+    } finally {
+      clearInterval(fetchKeepAlive);
+    }
     if (!upstreamResp.ok) {
       const errText = await upstreamResp.text();
       throw new Error(`Upstream returned ${upstreamResp.status}: ${errText}`);
@@ -1592,6 +1605,10 @@ async function executeAgentCompletions(
     let buffer = "";
 
     while (true) {
+      if (req.destroyed) {
+        log("info", "[Chat] Request destroyed by client. Aborting stream reader loop.");
+        break;
+      }
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
@@ -1712,11 +1729,35 @@ async function executeAgentCompletions(
       messages.push({ role: "assistant", tool_calls: toolCalls });
 
       for (const tc of toolCalls) {
+        if (req.destroyed) {
+          log("info", "[Chat] Request destroyed by client. Aborting tool execution loop.");
+          break;
+        }
         writeDelta(`\n\n> 🔧 **Agent Executing Tool:** \`${tc.function.name}\`...\n`);
         const workspacePath = body.workspacePath || "";
-        const output = await handleAgentToolCall(tc, workspacePath);
+
+        // Keep connection alive with periodic pings while executing local tools
+        const toolKeepAlive = setInterval(() => {
+          if (!res.writableEnded) {
+            res.write(": keep-alive\n\n");
+          }
+        }, 15000);
+
+        let output;
+        try {
+          output = await handleAgentToolCall(tc, workspacePath);
+        } finally {
+          clearInterval(toolKeepAlive);
+        }
+
         writeDelta(`\n\`\`\`\n${output}\n\`\`\`\n`);
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
+      }
+
+      if (req.destroyed) {
+        log("info", "[Chat] Request destroyed by client. Aborting agent execution loop recursion.");
+        if (!res.writableEnded) res.end();
+        return;
       }
 
       return executeAgentCompletions(req, res, body, resolved, messages, tools, useAgent, activeSkillId, startTime, cacheKey, depth + 1);
@@ -1796,6 +1837,7 @@ async function executeAgentCompletions(
 // ---- OpenAI passthrough: POST /v1/chat/completions ----
 
 app.post("/v1/chat/completions", async (req, res) => {
+  req.socket.setTimeout(0); // Disable socket timeout for streaming agent loop
   const startTime = Date.now();
   stats.chatRequests++;
   
@@ -2645,27 +2687,27 @@ app.post("/api/apps/:id/launch", (req, res) => {
   const provider = getProvider(providerId || loadConfig().activeProviderId);
   if (!provider) return res.status(404).json({ error: "Provider not found" });
   const proxyUrl = "http://" + HOST + ":" + PORT;
-  // Only pass safe env vars - never spread entire process.env
+  // Inherit environment variables but override target variables pointing to proxy
   const envVars: Record<string, string> = {
-    PATH: process.env.PATH || "",
-    SystemRoot: process.env.SystemRoot || "C:\\WINDOWS",
-    TEMP: process.env.TEMP || "",
-    TMP: process.env.TMP || "",
-    USERPROFILE: process.env.USERPROFILE || "",
-    HOME: process.env.HOME || process.env.USERPROFILE || "",
-    LOCALAPPDATA: process.env.LOCALAPPDATA || "",
-    APPDATA: process.env.APPDATA || "",
+    ...(process.env as Record<string, string>),
     OPENAI_BASE_URL: proxyUrl + "/v1",
     OPENAI_API_KEY: "sk-dummy",
     ANTHROPIC_BASE_URL: proxyUrl,
     ANTHROPIC_API_KEY: "sk-dummy",
   };
+  // Delete real/system API keys ending with _API_KEY to force local proxy usage
+  for (const key of Object.keys(envVars)) {
+    if (key.endsWith("_API_KEY") && key !== "OPENAI_API_KEY" && key !== "ANTHROPIC_API_KEY") {
+      delete envVars[key];
+    }
+  }
   try {
     const apps = getCachedApps();
     const app = apps.find(a => a.id === id);
     if (!app) return res.status(404).json({ error: "App not found" });
     if (!app.installed) return res.status(400).json({ error: app.name + " is not installed" });
 
+    let launchPath = app.path;
     if (app.type === "cli") {
       // Codex CLI/Desktop 需要更新 config.toml 中的代理地址
       if (id.startsWith("codex")) {
@@ -2754,12 +2796,12 @@ app.post("/api/apps/:id/launch", (req, res) => {
         // Override target launch path to VS Code if installed
         const vscodeApp = apps.find(a => a.id === "vscode");
         if (vscodeApp && vscodeApp.installed && vscodeApp.path) {
-          app.path = vscodeApp.path;
+          launchPath = vscodeApp.path;
         }
       }
 
-      if (app.path && !app.path.endsWith(".json")) {
-        const child = spawn(app.path, [], { detached: true, stdio: "ignore", env: envVars });
+      if (launchPath && !launchPath.endsWith(".json")) {
+        const child = spawn(launchPath, [], { detached: true, stdio: "ignore", env: envVars });
         child.unref();
       }
       res.json({ ok: true, message: app.name + " launched with " + provider.name });

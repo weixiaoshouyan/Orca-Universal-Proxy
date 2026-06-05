@@ -8,8 +8,11 @@ if (token) {
   token = sessionStorage.getItem('orca_token') || '';
 }
 
+const isDev = window.location.port === '5173';
+const API_BASE_URL = isDev ? 'http://127.0.0.1:18080' : window.location.origin;
+
 export const api = axios.create({
-  baseURL: 'http://127.0.0.1:18080',
+  baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
     ...(token ? { 'x-local-token': token } : {})
@@ -19,7 +22,7 @@ export const api = axios.create({
 // Helper for SSE streams
 export async function fetchEventSource(url: string, body: any, onMessage: (data: string) => void, onDone: () => void, onError: (err: any) => void, signal?: AbortSignal) {
   try {
-    const response = await fetch(`http://127.0.0.1:18080${url}`, {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -38,14 +41,18 @@ export async function fetchEventSource(url: string, body: any, onMessage: (data:
 
     if (!reader) throw new Error("No reader");
 
+    let buffer = '';
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
       for (const line of lines) {
-        if (line.startsWith('data: ') && line !== 'data: [DONE]') {
-          const dataStr = line.substring(6);
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+          const dataStr = trimmed.substring(6);
           try {
             onMessage(dataStr);
           } catch (e) {
@@ -54,6 +61,20 @@ export async function fetchEventSource(url: string, body: any, onMessage: (data:
         }
       }
     }
+    
+    // Process residual buffer if any
+    if (buffer.trim()) {
+      const trimmed = buffer.trim();
+      if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+        const dataStr = trimmed.substring(6);
+        try {
+          onMessage(dataStr);
+        } catch (e) {
+          console.error("Parse error", e);
+        }
+      }
+    }
+    
     onDone();
   } catch (e) {
     onError(e);
