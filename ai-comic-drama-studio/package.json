@@ -4,8 +4,8 @@
   "description": "AI漫剧工坊 - 自动生成玄幻修仙漫画视频",
   "main": "main.ts",
   "scripts": {
-    "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:electron\"",
-    "dev:frontend": "cd frontend && npm run dev",
+    "dev": "echo 'Starting development servers...' && start cmd /k \"cd frontend && npm start\" && ts-node main.ts",
+    "dev:frontend": "cd frontend && npm start",
     "dev:electron": "ts-node main.ts",
     "build": "npm run build:frontend && npm run build:electron",
     "build:frontend": "cd frontend && npm run build",
