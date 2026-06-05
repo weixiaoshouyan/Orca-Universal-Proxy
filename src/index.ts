@@ -239,6 +239,8 @@ app.post("/api/theme", (req, res) => {
 });
 
 const pendingChooseDirRequests = new Map<string, (result: { path?: string; cancelled?: boolean }) => void>();
+const pendingChooseSkillRequests = new Map<string, (result: { path?: string; cancelled?: boolean }) => void>();
+const pendingChooseCustomFileRequests = new Map<string, (result: { path?: string; cancelled?: boolean }) => void>();
 
 if (process.send) {
   process.on("message", (msg: any) => {
@@ -247,6 +249,18 @@ if (process.send) {
       if (cb) {
         cb({ path: msg.path, cancelled: msg.cancelled });
         pendingChooseDirRequests.delete(msg.requestId);
+      }
+    } else if (msg && msg.type === "choose-file-response") {
+      const cb = pendingChooseSkillRequests.get(msg.requestId);
+      if (cb) {
+        cb({ path: msg.path, cancelled: msg.cancelled });
+        pendingChooseSkillRequests.delete(msg.requestId);
+      }
+    } else if (msg && msg.type === "choose-custom-file-response") {
+      const cb = pendingChooseCustomFileRequests.get(msg.requestId);
+      if (cb) {
+        cb({ path: msg.path, cancelled: msg.cancelled });
+        pendingChooseCustomFileRequests.delete(msg.requestId);
       }
     }
   });
@@ -393,6 +407,27 @@ app.get("/api/billing-history", (_req, res) => {
   }
 });
 
+app.post("/api/reset-billing", (_req, res) => {
+  try {
+    if (fs.existsSync(BILLING_FILE)) {
+      fs.writeFileSync(BILLING_FILE, JSON.stringify({}, null, 2));
+    }
+    stats.totalRequests = 0;
+    stats.codexRequests = 0;
+    stats.claudeRequests = 0;
+    stats.chatRequests = 0;
+    stats.errors = 0;
+    stats.totalTokens = 0;
+    stats.totalCost = 0;
+    tokenHistory.length = 0;
+    log("info", "[Stats] Billing data and stats reset successfully");
+    res.json({ ok: true });
+  } catch (e) {
+    log("error", "Failed to reset billing stats:", e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // ---- Skills & Agents Management ----
 app.get("/api/skills", (_req, res) => {
   try {
@@ -466,6 +501,239 @@ app.post("/api/skills/:id/run-script", async (req, res) => {
     const output = await runSkillScript(id, scriptName, args);
     res.json({ ok: true, output });
   } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/skills/import", (req, res) => {
+  const getSelectedFilePath = (): Promise<{ path?: string; cancelled?: boolean; error?: string }> => {
+    return new Promise((resolve) => {
+      if (_isElectron && process.send) {
+        const requestId = Math.random().toString(36).substring(2, 15);
+        pendingChooseSkillRequests.set(requestId, (result) => {
+          resolve({ path: result.path, cancelled: result.cancelled });
+        });
+        
+        // Auto-timeout after 5 minutes
+        setTimeout(() => {
+          if (pendingChooseSkillRequests.has(requestId)) {
+            const cb = pendingChooseSkillRequests.get(requestId);
+            if (cb) cb({ cancelled: true });
+            pendingChooseSkillRequests.delete(requestId);
+          }
+        }, 5 * 60 * 1000);
+        
+        process.send({ type: "choose-file", requestId });
+      } else {
+        const { exec } = require("child_process");
+        const isWindows = process.platform === "win32";
+        if (!isWindows) {
+          return resolve({ error: "Unsupported platform. Only Windows is supported." });
+        }
+
+        const psCommand = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = '选择技能的 README.md 或 SKILL.md 文件 / Select Skill README File'; $f.Filter = 'Markdown files (*.md)|*.md'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }`;
+
+        exec(`powershell -NoProfile -Command "${psCommand}"`, (err: any, stdout: string, stderr: string) => {
+          if (err) {
+            log("error", "PowerShell choose-file failed: " + err.message);
+            return resolve({ error: err.message });
+          }
+          const filePath = stdout.trim();
+          if (!filePath) {
+            return resolve({ cancelled: true });
+          }
+          resolve({ path: filePath });
+        });
+      }
+    });
+  };
+
+  getSelectedFilePath().then(async (result) => {
+    if (result.error) {
+      return res.status(500).json({ error: result.error });
+    }
+    if (result.cancelled || !result.path) {
+      return res.json({ cancelled: true });
+    }
+
+    const selectedFile = result.path;
+    try {
+      if (!fs.existsSync(selectedFile)) {
+        return res.status(400).json({ error: "所选文件不存在" });
+      }
+
+      const sourceDir = path.dirname(selectedFile);
+      const folderName = path.basename(sourceDir);
+      
+      // Slugify directory name to create a valid skill ID (letters, numbers, hyphens, underscores)
+      let skillId = folderName
+        .replace(/[^a-zA-Z0-9_-]/g, "_")
+        .toLowerCase();
+      if (!skillId) {
+        skillId = "imported_skill_" + Math.random().toString(36).substring(2, 7);
+      }
+
+      // Check if target directory already exists, if so, append suffix to avoid conflict
+      let targetDir = path.join(SKILLS_DIR, skillId);
+      let suffix = 1;
+      let finalSkillId = skillId;
+      while (fs.existsSync(targetDir)) {
+        finalSkillId = `${skillId}_${suffix}`;
+        targetDir = path.join(SKILLS_DIR, finalSkillId);
+        suffix++;
+      }
+
+      fs.mkdirSync(targetDir, { recursive: true });
+
+      // Recursively copy sourceDir to targetDir
+      const copyFolderRecursiveSync = (from: string, to: string) => {
+        if (!fs.existsSync(to)) {
+          fs.mkdirSync(to, { recursive: true });
+        }
+        const items = fs.readdirSync(from);
+        for (const item of items) {
+          // Skip .git, node_modules, and other common build/system files
+          if (item === ".git" || item === "node_modules" || item === ".DS_Store") {
+            continue;
+          }
+          const srcPath = path.join(from, item);
+          const dstPath = path.join(to, item);
+          const stat = fs.statSync(srcPath);
+          if (stat.isFile()) {
+            fs.copyFileSync(srcPath, dstPath);
+          } else if (stat.isDirectory()) {
+            copyFolderRecursiveSync(srcPath, dstPath);
+          }
+        }
+      };
+
+      copyFolderRecursiveSync(sourceDir, targetDir);
+
+      // Check for SKILL.md in the imported folder
+      const targetSkillFile = path.join(targetDir, "SKILL.md");
+      if (!fs.existsSync(targetSkillFile)) {
+        // If SKILL.md doesn't exist, read the selected markdown file (e.g. README.md)
+        // and wrap it as SKILL.md
+        const selectedFileBase = path.basename(selectedFile);
+        const targetSelectedFile = path.join(targetDir, selectedFileBase);
+        
+        let mdContent = "";
+        if (fs.existsSync(targetSelectedFile)) {
+          mdContent = fs.readFileSync(targetSelectedFile, "utf-8");
+        } else if (fs.existsSync(selectedFile)) {
+          mdContent = fs.readFileSync(selectedFile, "utf-8");
+        }
+
+        // Generate SKILL.md
+        // Attempt to parse existing name/description if there is frontmatter
+        let parsed = { name: "", description: "", body: mdContent };
+        if (mdContent.startsWith("---")) {
+          parsed = parseFrontmatter(mdContent);
+        }
+
+        const skillName = parsed.name || folderName;
+        const skillDesc = parsed.description || `Imported from ${selectedFileBase}`;
+        const skillBody = parsed.body || mdContent;
+
+        const newSkillContent = `---
+name: "${skillName}"
+description: "${skillDesc}"
+---
+${skillBody}`;
+
+        fs.writeFileSync(targetSkillFile, newSkillContent, "utf-8");
+      }
+
+      log("info", `[Skills] Successfully imported skill: ${finalSkillId}`);
+      res.json({ ok: true, id: finalSkillId });
+    } catch (e: any) {
+      log("error", "Failed to import skill: " + e.message);
+      res.status(500).json({ error: e.message });
+    }
+  }).catch((e) => {
+    res.status(500).json({ error: String(e) });
+  });
+});
+
+app.post("/api/skills", (req, res) => {
+  const { id, name, description, instructions } = req.body;
+  if (!id || !name) {
+    return res.status(400).json({ error: "技能 ID 和名称为必填项" });
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    return res.status(400).json({ error: "技能 ID 只能包含英文字符、数字和中划线" });
+  }
+
+  const skillPath = path.join(SKILLS_DIR, id);
+  const skillFile = path.join(skillPath, "SKILL.md");
+  if (fs.existsSync(skillFile)) {
+    return res.status(400).json({ error: `技能 ID 为 ${id} 的技能已经存在` });
+  }
+
+  try {
+    if (!fs.existsSync(skillPath)) {
+      fs.mkdirSync(skillPath, { recursive: true });
+    }
+    const mdContent = `---
+name: "${name}"
+description: "${description || ""}"
+---
+${instructions || ""}`;
+
+    fs.writeFileSync(skillFile, mdContent, "utf-8");
+    log("info", `[Skills] Created new skill: ${id} (${name})`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    log("error", `Failed to create skill ${id}:`, e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.put("/api/skills/:id", (req, res) => {
+  const { id } = req.params;
+  const { name, description, instructions } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: "技能名称为必填项" });
+  }
+
+  const skillPath = path.join(SKILLS_DIR, id);
+  const skillFile = path.join(skillPath, "SKILL.md");
+  if (!fs.existsSync(skillFile)) {
+    return res.status(404).json({ error: "未找到待编辑的技能" });
+  }
+
+  try {
+    if (!fs.existsSync(skillPath)) {
+      fs.mkdirSync(skillPath, { recursive: true });
+    }
+    const mdContent = `---
+name: "${name}"
+description: "${description || ""}"
+---
+${instructions || ""}`;
+
+    fs.writeFileSync(skillFile, mdContent, "utf-8");
+    log("info", `[Skills] Updated skill: ${id} (${name})`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    log("error", `Failed to update skill ${id}:`, e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete("/api/skills/:id", (req, res) => {
+  const { id } = req.params;
+  const skillPath = path.join(SKILLS_DIR, id);
+  if (!fs.existsSync(skillPath)) {
+    return res.status(404).json({ error: "技能不存在，删除失败" });
+  }
+
+  try {
+    fs.rmSync(skillPath, { recursive: true, force: true });
+    log("info", `[Skills] Deleted skill: ${id}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    log("error", `Failed to delete skill ${id}:`, e);
     res.status(500).json({ error: e.message });
   }
 });
@@ -582,7 +850,49 @@ app.post("/v1/messages", async (req, res) => {
 
 // ---- Helpers for Agentic Completions ----
 
-const SKILLS_DIR = "C:\\Users\\台就\\.agents\\skills";
+const SKILLS_DIR = path.join(_BASE_DIR, "data", "skills");
+
+function initSkillsDirectory() {
+  try {
+    let srcSkillsDir = path.join(_devDir, "skills");
+    if (!fs.existsSync(srcSkillsDir) && _isElectron) {
+      const unpackedDir = __dirname.replace("app.asar", "app.asar.unpacked");
+      srcSkillsDir = path.join(unpackedDir, "..", "skills");
+      if (!fs.existsSync(srcSkillsDir)) {
+        srcSkillsDir = path.join(__dirname, "..", "skills");
+      }
+    }
+
+    if (!fs.existsSync(SKILLS_DIR)) {
+      fs.mkdirSync(SKILLS_DIR, { recursive: true });
+    }
+
+    const existing = fs.readdirSync(SKILLS_DIR);
+    if (existing.length === 0 && fs.existsSync(srcSkillsDir)) {
+      log("info", `[Skills] Copying default skills from ${srcSkillsDir} to ${SKILLS_DIR}`);
+
+      const copyFolderRecursiveSync = (from: string, to: string) => {
+        if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
+        const items = fs.readdirSync(from);
+        for (const item of items) {
+          const srcPath = path.join(from, item);
+          const dstPath = path.join(to, item);
+          const stat = fs.statSync(srcPath);
+          if (stat.isFile()) {
+            fs.copyFileSync(srcPath, dstPath);
+          } else if (stat.isDirectory()) {
+            copyFolderRecursiveSync(srcPath, dstPath);
+          }
+        }
+      };
+
+      copyFolderRecursiveSync(srcSkillsDir, SKILLS_DIR);
+      log("info", "[Skills] Default skills copied successfully.");
+    }
+  } catch (e) {
+    log("error", "Failed to initialize skills directory:", e);
+  }
+}
 
 // Parse YAML frontmatter manually
 function parseFrontmatter(content: string): { name: string; description: string; body: string } {
@@ -638,8 +948,34 @@ function runSkillScript(skillId: string, scriptName: string, args: string[], wor
     });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (d) => stdout += d.toString());
-    child.stderr.on("data", (d) => stderr += d.toString());
+    const MAX_BUFFER = 100 * 1024;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+
+    child.stdout.on("data", (d) => {
+      const chunk = d.toString();
+      if (stdout.length + chunk.length > MAX_BUFFER) {
+        if (!stdoutTruncated) {
+          stdout += chunk.substring(0, MAX_BUFFER - stdout.length) + "\n[Stdout truncated: exceeded 100KB limit...]";
+          stdoutTruncated = true;
+        }
+      } else if (!stdoutTruncated) {
+        stdout += chunk;
+      }
+    });
+
+    child.stderr.on("data", (d) => {
+      const chunk = d.toString();
+      if (stderr.length + chunk.length > MAX_BUFFER) {
+        if (!stderrTruncated) {
+          stderr += chunk.substring(0, MAX_BUFFER - stderr.length) + "\n[Stderr truncated: exceeded 100KB limit...]";
+          stderrTruncated = true;
+        }
+      } else if (!stderrTruncated) {
+        stderr += chunk;
+      }
+    });
+
     child.on("close", (code) => {
       resolve(`[Exit Code ${code}]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
     });
@@ -663,9 +999,33 @@ function executeTerminalCommand(command: string, workspacePath: string): Promise
 
     let stdout = "";
     let stderr = "";
+    const MAX_BUFFER = 100 * 1024;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
 
-    child.stdout.on("data", (d) => stdout += d.toString());
-    child.stderr.on("data", (d) => stderr += d.toString());
+    child.stdout.on("data", (d) => {
+      const chunk = d.toString();
+      if (stdout.length + chunk.length > MAX_BUFFER) {
+        if (!stdoutTruncated) {
+          stdout += chunk.substring(0, MAX_BUFFER - stdout.length) + "\n[Stdout truncated: exceeded 100KB limit...]";
+          stdoutTruncated = true;
+        }
+      } else if (!stdoutTruncated) {
+        stdout += chunk;
+      }
+    });
+
+    child.stderr.on("data", (d) => {
+      const chunk = d.toString();
+      if (stderr.length + chunk.length > MAX_BUFFER) {
+        if (!stderrTruncated) {
+          stderr += chunk.substring(0, MAX_BUFFER - stderr.length) + "\n[Stderr truncated: exceeded 100KB limit...]";
+          stderrTruncated = true;
+        }
+      } else if (!stderrTruncated) {
+        stderr += chunk;
+      }
+    });
 
     // Auto-timeout after 30 seconds
     const timeout = setTimeout(() => {
@@ -691,17 +1051,56 @@ function getModelPricing(model: string): { inputPrice: number; outputPrice: numb
   return pricing[model] || { inputPrice: 0.0, outputPrice: 0.0 };
 }
 
-function logDailyBilling(model: string, tokens: number) {
+function logDailyBilling(model: string, total: number, cached: number, uncached: number) {
   try {
     const today = new Date().toISOString().split("T")[0];
-    let data: Record<string, Record<string, number>> = {};
+    const currentMonthStr = today.slice(0, 7); // e.g. "2026-06"
+    let data: Record<string, Record<string, any>> = {};
     if (fs.existsSync(BILLING_FILE)) {
       data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
     }
+
+    // 跨月自动重置检查：只保留当前月份的数据，清理旧月份数据
+    let hasOldMonthData = false;
+    const filteredData: Record<string, any> = {};
+    for (const [dateStr, dayData] of Object.entries(data)) {
+      if (dateStr.startsWith(currentMonthStr)) {
+        filteredData[dateStr] = dayData;
+      } else {
+        hasOldMonthData = true;
+      }
+    }
+    if (hasOldMonthData) {
+      log("info", `[Billing] Auto-resetting billing stats: found data from a different month. Only keeping ${currentMonthStr}`);
+      data = filteredData;
+    }
+
     if (!data[today]) {
       data[today] = {};
     }
-    data[today][model] = (data[today][model] || 0) + tokens;
+
+    const current = data[today][model];
+    if (current && typeof current === "object") {
+      data[today][model] = {
+        total: (current.total || 0) + total,
+        cached: (current.cached || 0) + cached,
+        uncached: (current.uncached || 0) + uncached,
+      };
+    } else if (typeof current === "number") {
+      // 兼容并平滑升级老数据格式
+      data[today][model] = {
+        total: current + total,
+        cached: cached,
+        uncached: uncached,
+      };
+    } else {
+      data[today][model] = {
+        total,
+        cached,
+        uncached,
+      };
+    }
+
     fs.writeFileSync(BILLING_FILE, JSON.stringify(data, null, 2), "utf-8");
   } catch (e) {
     log("error", "Failed to save daily billing stats:", e);
@@ -709,75 +1108,68 @@ function logDailyBilling(model: string, tokens: number) {
 }
 
 function seedBillingFile() {
-  const needsReSeed = !fs.existsSync(BILLING_FILE) || !fs.readFileSync(BILLING_FILE, "utf-8").includes("deepseek-chat");
+  const needsReSeed = !fs.existsSync(BILLING_FILE);
+  const currentMonthStr = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
   if (needsReSeed) {
-    const mockBilling = {
-      "2026-06-01": {
-        "mimo-v2.5": 50000,
-        "mimo-v2.5-pro": 120000,
-        "mimo-v2-omni": 10000,
-        "deepseek-chat": 35000,
-        "gpt-4o": 25000,
-        "claude-3-5-sonnet": 15000
-      },
-      "2026-06-02": {
-        "mimo-v2.5": 0,
-        "mimo-v2.5-pro": 76852941,
-        "mimo-v2-omni": 0,
-        "deepseek-chat": 0,
-        "gpt-4o": 0,
-        "claude-3-5-sonnet": 0
-      },
-      "2026-06-03": {
-        "mimo-v2.5": 200000,
-        "mimo-v2.5-pro": 450000,
-        "mimo-v2-omni": 30000,
-        "deepseek-chat": 150000,
-        "gpt-4o": 80000,
-        "claude-3-5-sonnet": 50000
-      },
-      "2026-06-04": {
-        "mimo-v2.5": 1250000,
-        "mimo-v2.5-pro": 10562768,
-        "mimo-v2-omni": 1800000,
-        "deepseek-chat": 800000,
-        "gpt-4o": 350000,
-        "claude-3-5-sonnet": 200000
-      }
-    };
     try {
       const parentDir = path.dirname(BILLING_FILE);
       if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-      fs.writeFileSync(BILLING_FILE, JSON.stringify(mockBilling, null, 2), "utf-8");
-      stats.totalTokens = 93030709;
-      stats.totalCost = 46.5153;
+      fs.writeFileSync(BILLING_FILE, JSON.stringify({}, null, 2), "utf-8");
+      stats.totalTokens = 0;
+      stats.totalCost = 0;
     } catch (e) {}
   } else {
     try {
-      const data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
-      let total = 0;
-      for (const day of Object.values(data)) {
-        for (const val of Object.values(day as Record<string, number>)) {
-          total += val;
+      let data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
+      
+      // 跨月自动重置检查：若含有非当前月数据，则自动清理重置只保留当月
+      let hasOldMonthData = false;
+      const filteredData: Record<string, any> = {};
+      for (const [dateStr, dayData] of Object.entries(data)) {
+        if (dateStr.startsWith(currentMonthStr)) {
+          filteredData[dateStr] = dayData;
+        } else {
+          hasOldMonthData = true;
         }
       }
-      if (total > 0) {
-        stats.totalTokens = total;
-        stats.totalCost = (total * 0.5) / 1000000;
+      if (hasOldMonthData) {
+        log("info", `[Billing] Auto-resetting billing stats on startup: clearing records older than ${currentMonthStr}`);
+        data = filteredData;
+        fs.writeFileSync(BILLING_FILE, JSON.stringify(data, null, 2), "utf-8");
       }
+
+      let total = 0;
+      let totalCost = 0;
+      for (const [_, dayData] of Object.entries(data)) {
+        for (const [model, val] of Object.entries(dayData as Record<string, any>)) {
+          const price = getModelPricing(model);
+          if (typeof val === "number") {
+            total += val;
+            totalCost += (val * price.inputPrice) / 1000000;
+          } else if (val && typeof val === "object") {
+            total += (val.total || 0);
+            const uncached = val.uncached || 0;
+            const cached = val.cached || 0;
+            totalCost += ((uncached * price.inputPrice) + (cached * price.inputPrice * 0.5)) / 1000000;
+          }
+        }
+      }
+      stats.totalTokens = total;
+      stats.totalCost = totalCost;
     } catch (e) {}
   }
 }
 
-function accumulateCost(model: string, promptTokens: number, completionTokens: number) {
+function accumulateCost(model: string, promptTokens: number, completionTokens: number, cachedTokens: number = 0) {
   const price = getModelPricing(model);
-  const cost = ((promptTokens * price.inputPrice) + (completionTokens * price.outputPrice)) / 1000000;
+  const uncachedTokens = Math.max(0, promptTokens - cachedTokens);
+  const cost = ((uncachedTokens * price.inputPrice) + (cachedTokens * price.inputPrice * 0.5) + (completionTokens * price.outputPrice)) / 1000000;
   const total = promptTokens + completionTokens;
   stats.totalTokens += total;
   if (!stats.totalCost) stats.totalCost = 0;
   stats.totalCost += cost;
-  log("info", `[Billing] Model: ${model}, Prompt: ${promptTokens}, Completion: ${completionTokens}, Cost: $${cost.toFixed(6)}, Cumulative Cost: $${stats.totalCost.toFixed(4)}`);
-  logDailyBilling(model, total);
+  log("info", `[Billing] Model: ${model}, Prompt: ${promptTokens} (Cached: ${cachedTokens}), Completion: ${completionTokens}, Cost: $${cost.toFixed(6)}, Cumulative Cost: $${stats.totalCost.toFixed(4)}`);
+  logDailyBilling(model, total, cachedTokens, uncachedTokens + completionTokens);
 }
 
 async function handleAgentToolCall(tc: any, workspacePath: string): Promise<string> {
@@ -830,7 +1222,12 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
       };
       const files = walk(workspacePath);
       if (files.length === 0) return "Workspace directory is empty.";
-      return `Workspace files in ${workspacePath}:\n${files.map(f => `- ${f}`).join("\n")}`;
+      const fileListStr = files.map(f => `- ${f}`).join("\n");
+      const limit = 100 * 1024;
+      if (fileListStr.length > limit) {
+        return `Workspace files in ${workspacePath} (Truncated):\n${fileListStr.substring(0, limit)}\n... [List truncated. Too many files inside workspace directory.]`;
+      }
+      return `Workspace files in ${workspacePath}:\n${fileListStr}`;
     } catch (e: any) {
       return `Error listing files: ${e.message}`;
     }
@@ -852,7 +1249,12 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
       if (!stat.isFile()) {
         return `Error: Target ${args.relativeFilePath} is not a file.`;
       }
-      return fs.readFileSync(fullPath, "utf-8");
+      const content = fs.readFileSync(fullPath, "utf-8");
+      const limit = 1024 * 1024; // 1MB limit for safety to prevent V8 freeze or LLM timeouts
+      if (content.length > limit) {
+        return content.substring(0, limit) + "\n\n[File content truncated. Only the first 1MB is shown to prevent request timeout and V8 heap block...]";
+      }
+      return content;
     } catch (e: any) {
       return `Error reading file: ${e.message}`;
     }
@@ -875,6 +1277,151 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
       return `Success: File written successfully to ${args.relativeFilePath}`;
     } catch (e: any) {
       return `Error writing file: ${e.message}`;
+    }
+  }
+
+  if (toolName === "patch_workspace_file") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected.";
+    }
+    try {
+      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
+      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+        return "Error: Path traversal violation. Access denied.";
+      }
+      if (!fs.existsSync(fullPath)) {
+        return `Error: File not found at ${args.relativeFilePath}`;
+      }
+      const stat = fs.statSync(fullPath);
+      if (!stat.isFile()) {
+        return `Error: Target ${args.relativeFilePath} is not a file.`;
+      }
+      const content = fs.readFileSync(fullPath, "utf-8");
+      const searchContent = args.searchContent;
+      const replacementContent = args.replacementContent;
+
+      if (!searchContent) {
+        return "Error: searchContent parameter is empty.";
+      }
+
+      const occurrences = content.split(searchContent).length - 1;
+      if (occurrences === 0) {
+        return `Error: The searchContent was not found in the file. Please ensure the spacing, indentation, and newlines match the file content exactly. File contents around relevant code block should be verified.`;
+      }
+      if (occurrences > 1) {
+        return `Error: The searchContent was found ${occurrences} times in the file. To avoid incorrect replacements, please provide a unique searchContent block with more surrounding context lines (e.g. adjacent lines of code).`;
+      }
+
+      const newContent = content.replace(searchContent, replacementContent);
+      fs.writeFileSync(fullPath, newContent, "utf-8");
+      return `Success: File ${args.relativeFilePath} patched successfully.`;
+    } catch (e: any) {
+      return `Error patching file: ${e.message}`;
+    }
+  }
+
+  if (toolName === "search_grep") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected.";
+    }
+    try {
+      const query = args.query;
+      const filePattern = args.filePattern;
+      if (!query) return "Error: query parameter is required.";
+      
+      const results: string[] = [];
+      const queryLower = query.toLowerCase();
+      let patternRegex: RegExp | null = null;
+      if (filePattern) {
+        const cleanPattern = filePattern
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*')
+          .replace(/\?/g, '.');
+        patternRegex = new RegExp(`^${cleanPattern}$`, 'i');
+      }
+
+      const searchDir = (dir: string) => {
+        if (results.length > 50) return;
+        try {
+          const list = fs.readdirSync(dir, { withFileTypes: true });
+          for (const item of list) {
+            const resPath = path.join(dir, item.name);
+            const relPath = path.relative(workspacePath, resPath).replace(/\\/g, '/');
+            if (item.isDirectory()) {
+              if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
+              searchDir(resPath);
+            } else {
+              if (patternRegex && !patternRegex.test(item.name) && !patternRegex.test(relPath)) {
+                continue;
+              }
+              const stat = fs.statSync(resPath);
+              if (stat.size > 2 * 1024 * 1024) continue; // ignore files > 2MB
+              const content = fs.readFileSync(resPath, "utf-8");
+              if (content.toLowerCase().includes(queryLower)) {
+                const lines = content.split("\n");
+                lines.forEach((line, idx) => {
+                  if (line.toLowerCase().includes(queryLower)) {
+                    results.push(`${relPath}:${idx + 1}: ${line.trim()}`);
+                  }
+                });
+              }
+            }
+          }
+        } catch (e) {}
+      };
+
+      searchDir(workspacePath);
+      if (results.length === 0) return `No matches found for query: "${query}"`;
+      const limit = 50;
+      const sliced = results.slice(0, limit);
+      const truncatedText = results.length > limit ? `\n... [Truncated: showing first ${limit} matches out of ${results.length} total matches.]` : '';
+      return `Search Results for query: "${query}":\n\n${sliced.join("\n")}${truncatedText}`;
+    } catch (e: any) {
+      return `Error in search_grep: ${e.message}`;
+    }
+  }
+
+  if (toolName === "glob_files") {
+    if (!workspacePath || !fs.existsSync(workspacePath)) {
+      return "Error: No active workspace directory selected.";
+    }
+    try {
+      const pattern = args.pattern;
+      if (!pattern) return "Error: pattern parameter is required.";
+      const matchedFiles: string[] = [];
+      let cleanPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      cleanPattern = cleanPattern.replace(/\*\*/g, '@@ANY@@');
+      cleanPattern = cleanPattern.replace(/\*/g, '[^/]*');
+      cleanPattern = cleanPattern.replace(/@@ANY@@/g, '.*');
+      const regex = new RegExp(`^${cleanPattern}$`, 'i');
+
+      const walk = (dir: string) => {
+        if (matchedFiles.length > 200) return;
+        try {
+          const list = fs.readdirSync(dir, { withFileTypes: true });
+          for (const item of list) {
+            const resPath = path.join(dir, item.name);
+            const relPath = path.relative(workspacePath, resPath).replace(/\\/g, '/');
+            if (item.isDirectory()) {
+              if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
+              walk(resPath);
+            } else {
+              if (regex.test(relPath) || regex.test(item.name)) {
+                matchedFiles.push(relPath);
+              }
+            }
+          }
+        } catch (e) {}
+      };
+
+      walk(workspacePath);
+      if (matchedFiles.length === 0) return `No files matched the pattern: "${pattern}"`;
+      const resultStr = matchedFiles.map(f => `- ${f}`).join("\n");
+      const limit = 200;
+      const truncatedText = matchedFiles.length > limit ? `\n... [List truncated. Too many matched files.]` : '';
+      return `Matched files for pattern "${pattern}":\n\n${resultStr.substring(0, 100 * 1024)}${truncatedText}`;
+    } catch (e: any) {
+      return `Error in glob_files: ${e.message}`;
     }
   }
 
@@ -1029,6 +1576,7 @@ async function executeAgentCompletions(
     let accumulatedText = "";
     let hasOpenedThinkBlock = false;
     let hasClosedThinkBlock = false;
+    let finalUsage: any = null;
     const reader = (upstreamResp.body as any).getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -1047,6 +1595,9 @@ async function executeAgentCompletions(
           if (dataStr === "[DONE]") continue;
           try {
             const parsed = JSON.parse(dataStr);
+            if (parsed.usage) {
+              finalUsage = parsed.usage;
+            }
             const choice = parsed.choices?.[0];
             if (choice) {
               if (choice.delta?.tool_calls) {
@@ -1165,7 +1716,17 @@ async function executeAgentCompletions(
       // Track billing for estimation based on text chunks length
       const estPromptTokens = JSON.stringify(messages).length / 4;
       const estOutputTokens = accumulatedText.length / 4;
-      accumulateCost(resolved.model, estPromptTokens, estOutputTokens);
+      
+      const promptTok = finalUsage?.prompt_tokens || estPromptTokens;
+      const compTok = finalUsage?.completion_tokens || estOutputTokens;
+      let cachedTok = 0;
+      if (finalUsage?.prompt_tokens_details?.cached_tokens !== undefined) {
+        cachedTok = finalUsage.prompt_tokens_details.cached_tokens;
+      } else if (finalUsage?.input_token_details?.cache_read !== undefined) {
+        cachedTok = finalUsage.input_token_details.cache_read;
+      }
+      accumulateCost(resolved.model, promptTok, compTok, cachedTok);
+
       // Persistent Caching
       if (cacheKey && accumulatedText && loadConfig().cacheEnabled) {
         const fullCachedResp = {
@@ -1174,7 +1735,7 @@ async function executeAgentCompletions(
           created: Math.floor(Date.now() / 1000),
           model: resolved.model,
           choices: [{ index: 0, message: { role: "assistant", content: accumulatedText }, finish_reason: "stop" }],
-          usage: { prompt_tokens: estPromptTokens, completion_tokens: estOutputTokens, total_tokens: estPromptTokens + estOutputTokens }
+          usage: { prompt_tokens: promptTok, completion_tokens: compTok, total_tokens: promptTok + compTok }
         };
         setCachedResponse(cacheKey, fullCachedResp);
       }
@@ -1206,7 +1767,13 @@ async function executeAgentCompletions(
     } else {
       const promptTok = data.usage?.prompt_tokens || 0;
       const compTok = data.usage?.completion_tokens || 0;
-      accumulateCost(resolved.model, promptTok, compTok);
+      let cachedTok = 0;
+      if (data.usage?.prompt_tokens_details?.cached_tokens !== undefined) {
+        cachedTok = data.usage.prompt_tokens_details.cached_tokens;
+      } else if (data.usage?.input_token_details?.cache_read !== undefined) {
+        cachedTok = data.usage.input_token_details.cache_read;
+      }
+      accumulateCost(resolved.model, promptTok, compTok, cachedTok);
       if (cacheKey && loadConfig().cacheEnabled) {
         setCachedResponse(cacheKey, data);
       }
@@ -1233,9 +1800,13 @@ app.post("/v1/chat/completions", async (req, res) => {
     const cached = getCachedResponse(cacheKey);
     if (cached) {
       log("info", `[Cache] Hit cache for key ${cacheKey}`);
+      const promptTok = cached.usage?.prompt_tokens || 0;
+      const compTok = cached.usage?.completion_tokens || 0;
+      accumulateCost(cached.model || body.model, promptTok, compTok, promptTok);
+
       if (body.stream) {
         const fullText = cached.choices?.[0]?.message?.content || "";
-        await replayStreamResponse(res, fullText, cached.model, () => {
+        await replayStreamResponse(res, fullText, cached.model || body.model, () => {
           log("info", `[Cache] Streaming cache replay completed in ${Date.now() - startTime}ms`);
         });
         return;
@@ -1304,7 +1875,7 @@ When the user issues a command that requires multiple steps, you must:
 3. Update the task status (e.g. change [ ] to [/] and then to [x]) in your follow-up text responses after tool executions, and continue this loop until all tasks are finished.
 ` + getSkillsSystemPrompt();
     if (body.workspacePath) {
-      agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou can use list_workspace_files, read_workspace_file, and write_workspace_file to scan, inspect, edit, or create files inside this workspace directory. Use these capabilities to autonomously read and edit workspace documents or run skill scripts directly to finish editing work.`;
+      agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou can use list_workspace_files, read_workspace_file, write_workspace_file, patch_workspace_file, search_grep, and glob_files to scan, inspect, edit, modify, search, or create files inside this workspace directory. When modifying existing files, you should prefer using patch_workspace_file to perform precise search-and-replace edits instead of rewriting the entire file. Use search_grep to search for specific code patterns (like function names or imports) recursively in the workspace. Use glob_files to list files matching a specific pattern. Use these capabilities to autonomously read and edit workspace documents or run skill scripts directly to finish editing work.`;
     } else {
       agentPrompt += `\nNo active workspace folder is currently selected. If you need to access files, please ask the user to select or edit the workspace directory using the UI.`;
     }
@@ -1317,6 +1888,19 @@ When the user issues a command that requires multiple steps, you must:
     } else {
       messages.unshift({ role: "system", content: agentPrompt });
     }
+  }
+
+  // 强化中英文自动对齐策略（加在 system prompt 最末尾，具有最强约束力）
+  const langConstraint = `\n\n[Language Alignment Constraint]\nIMPORTANT: You MUST think (inside <think> tags) and respond in the exact same language that the user uses to ask questions. If the user writes in Chinese, write your reasoning and responses in Chinese. If the user writes in English, write your reasoning and responses in English. Keep language alignment consistent at all times.\n重要：你必须使用与用户提问完全相同的语言进行思考（在 <think> 标签内）和回复。如果用户使用中文提问，你的思考过程和回复都必须使用中文。如果用户使用英文提问，你的思考和回复必须使用英文。时刻保持语言一致。`;
+  
+  const finalSystemMsgIdx = messages.findIndex(m => m.role === "system");
+  if (finalSystemMsgIdx >= 0) {
+    messages[finalSystemMsgIdx] = {
+      role: "system",
+      content: messages[finalSystemMsgIdx].content + langConstraint
+    };
+  } else {
+    messages.unshift({ role: "system", content: langConstraint });
   }
 
   // Collect Tools: Active Skill scripts + MCP tools + built-in workspace & skill tools
@@ -1385,6 +1969,72 @@ When the user issues a command that requires multiple steps, you must:
             }
           },
           required: ["relativeFilePath", "content"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "patch_workspace_file",
+        description: "Perform a search-and-replace modification inside an existing file in the active workspace. Provide the exact text to match, and the replacement text.",
+        parameters: {
+          type: "object",
+          properties: {
+            relativeFilePath: {
+              type: "string",
+              description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx')"
+            },
+            searchContent: {
+              type: "string",
+              description: "The exact, unique block of code/text in the file that you want to replace. Spacing, indentation, and newlines must match the file content exactly."
+            },
+            replacementContent: {
+              type: "string",
+              description: "The replacement content to substitute for the matched searchContent block."
+            }
+          },
+          required: ["relativeFilePath", "searchContent", "replacementContent"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "search_grep",
+        description: "Search for a text pattern or regular expression recursively across all files in the active workspace. Equivalent to ripgrep (rg) search.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string",
+              description: "The pattern to search for inside workspace files."
+            },
+            filePattern: {
+              type: "string",
+              description: "Optional glob pattern to restrict search files (e.g. '*.ts' or 'src/**/*.tsx')."
+            }
+          },
+          required: ["query"]
+        }
+      }
+    });
+
+    tools.push({
+      type: "function",
+      function: {
+        name: "glob_files",
+        description: "Find files in the active workspace matching a specific glob or pattern (e.g. '*.json' or 'src/**/*.ts').",
+        parameters: {
+          type: "object",
+          properties: {
+            pattern: {
+              type: "string",
+              description: "The pattern to match files against."
+            }
+          },
+          required: ["pattern"]
         }
       }
     });
@@ -1497,7 +2147,16 @@ When the user issues a command that requires multiple steps, you must:
   if (!res.headersSent) {
     res.status(502).json({ error: { message: `All routing paths failed. Last error: ${String(lastError)}`, type: "proxy_error" } });
   } else if (!res.writableEnded) {
-    res.write(`data: ${JSON.stringify({ error: { message: String(lastError) } })}\n\n`);
+    const errText = `\n\n[Proxy Execution Error: ${String(lastError)}]\n`;
+    const errorChunk = {
+      id: "chatcmpl-" + Date.now(),
+      object: "chat.completion.chunk",
+      created: Math.floor(Date.now() / 1000),
+      model: "error-handler",
+      choices: [{ index: 0, delta: { content: errText }, finish_reason: "error" }]
+    };
+    res.write("data: " + JSON.stringify(errorChunk) + "\n\n");
+    res.write("data: [DONE]\n\n");
     res.end();
   }
 });
@@ -1652,6 +2311,7 @@ app.all("/v1/*", async (req, res) => {
 
 app.listen(PORT, HOST, () => {
   seedBillingFile();
+  initSkillsDirectory();
   const active = getActiveProvider();
   log("info", "===========================================");
   log("info", "  Orca Universal Proxy v2.1.0");
@@ -1687,6 +2347,7 @@ interface AppInfo {
   running: boolean;
   description: string;
   type: string;
+  isCustomPath?: boolean;
 }
 
 function findExe(basePaths: string[], patterns: string[]) {
@@ -1847,6 +2508,19 @@ function scanApps() {
   const rooInstalled = fs.existsSync(rooConfigPath) || fs.existsSync(path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline"));
   apps.push({ id: "roo-code", name: "Roo Code", icon: "code", installed: rooInstalled, path: rooConfigPath, running: false, description: "Autonomous AI coding assistant for VS Code (Roo Cline)", type: "desktop" });
 
+  // Apply user custom app paths overrides from config
+  const customPaths = loadConfig().appPaths || {};
+  apps.forEach(app => {
+    if (customPaths[app.id]) {
+      const customPath = customPaths[app.id];
+      if (fs.existsSync(customPath)) {
+        app.installed = true;
+        app.path = customPath;
+        app.isCustomPath = true;
+      }
+    }
+  });
+
   return apps;
 }
 
@@ -1994,6 +2668,105 @@ app.post("/api/apps/:id/launch", (req, res) => {
     }
   } catch (e) {
     res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post("/api/apps/:id/choose-path", (req, res) => {
+  const { id } = req.params;
+  
+  const getSelectedPath = (): Promise<{ path?: string; cancelled?: boolean; error?: string }> => {
+    return new Promise((resolve) => {
+      if (_isElectron && process.send) {
+        const requestId = Math.random().toString(36).substring(2, 15);
+        pendingChooseCustomFileRequests.set(requestId, (result) => {
+          resolve({ path: result.path, cancelled: result.cancelled });
+        });
+        
+        // Auto-timeout after 5 minutes
+        setTimeout(() => {
+          if (pendingChooseCustomFileRequests.has(requestId)) {
+            const cb = pendingChooseCustomFileRequests.get(requestId);
+            if (cb) cb({ cancelled: true });
+            pendingChooseCustomFileRequests.delete(requestId);
+          }
+        }, 5 * 60 * 1000);
+        
+        const filters = id === "cline" || id === "roo-code" 
+          ? [{ name: "Cline/Roo Config File (settings.json)", extensions: ["json"] }]
+          : [{ name: "Executable Application Files (*.exe, *.cmd, *.bat)", extensions: ["exe", "cmd", "bat"] }];
+
+        process.send({ 
+          type: "choose-custom-file", 
+          requestId,
+          title: "选择 " + id + " 的程序文件或配置文件 / Select App Path",
+          filters
+        });
+      } else {
+        const { exec } = require("child_process");
+        const isWindows = process.platform === "win32";
+        if (!isWindows) {
+          return resolve({ error: "Unsupported platform. Only Windows is supported." });
+        }
+
+        const filter = id === "cline" || id === "roo-code"
+          ? "Config Files (*.json)|*.json|All Files (*.*)|*.*"
+          : "Executable Application Files (*.exe;*.cmd;*.bat)|*.exe;*.cmd;*.bat|All Files (*.*)|*.*";
+
+        const psCommand = `Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.OpenFileDialog; $f.Title = '选择 ${id} 的程序执行文件或配置文件 / Select App Path'; $f.Filter = '${filter}'; if ($f.ShowDialog() -eq 'OK') { Write-Output $f.FileName }`;
+
+        exec(`powershell -NoProfile -Command "${psCommand}"`, (err: any, stdout: string, stderr: string) => {
+          if (err) {
+            log("error", "PowerShell choose-custom-file failed: " + err.message);
+            return resolve({ error: err.message });
+          }
+          const filePath = stdout.trim();
+          if (!filePath) {
+            return resolve({ cancelled: true });
+          }
+          resolve({ path: filePath });
+        });
+      }
+    });
+  };
+
+  getSelectedPath().then((result) => {
+    if (result.error) {
+      return res.status(500).json({ error: result.error });
+    }
+    if (result.cancelled || !result.path) {
+      return res.json({ cancelled: true });
+    }
+
+    try {
+      const cfg = loadConfig();
+      if (!cfg.appPaths) cfg.appPaths = {};
+      cfg.appPaths[id] = result.path;
+      saveConfig(cfg);
+      _appsCache = null; // Clear apps cache to apply changes immediately
+      
+      log("info", `[Apps] Custom path set for ${id}: ${result.path}`);
+      res.json({ ok: true, path: result.path });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  }).catch((e) => {
+    res.status(500).json({ error: String(e) });
+  });
+});
+
+app.delete("/api/apps/:id/path", (req, res) => {
+  const { id } = req.params;
+  try {
+    const cfg = loadConfig();
+    if (cfg.appPaths && cfg.appPaths[id]) {
+      delete cfg.appPaths[id];
+      saveConfig(cfg);
+    }
+    _appsCache = null;
+    log("info", `[Apps] Cleared custom path for ${id}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
   }
 });
 

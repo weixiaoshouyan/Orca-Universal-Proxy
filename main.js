@@ -134,6 +134,48 @@ function startServer() {
             error: err.message
           });
         });
+      } else if (msg && msg.type === 'choose-file' && mainWindow) {
+        dialog.showOpenDialog(mainWindow, {
+          title: '选择技能的 README.md 或 SKILL.md 文件 / Select Skill README File',
+          filters: [
+            { name: 'Markdown 技能声明文件', extensions: ['md'] }
+          ],
+          properties: ['openFile']
+        }).then(result => {
+          serverProcess.send({
+            type: 'choose-file-response',
+            requestId: msg.requestId,
+            path: result.canceled ? undefined : result.filePaths[0],
+            cancelled: result.canceled
+          });
+        }).catch(err => {
+          serverProcess.send({
+            type: 'choose-file-response',
+            requestId: msg.requestId,
+            cancelled: true,
+            error: err.message
+          });
+        });
+      } else if (msg && msg.type === 'choose-custom-file' && mainWindow) {
+        dialog.showOpenDialog(mainWindow, {
+          title: msg.title || '选择文件 / Select File',
+          filters: msg.filters || [{ name: 'All Files', extensions: ['*'] }],
+          properties: ['openFile']
+        }).then(result => {
+          serverProcess.send({
+            type: 'choose-custom-file-response',
+            requestId: msg.requestId,
+            path: result.canceled ? undefined : result.filePaths[0],
+            cancelled: result.canceled
+          });
+        }).catch(err => {
+          serverProcess.send({
+            type: 'choose-custom-file-response',
+            requestId: msg.requestId,
+            cancelled: true,
+            error: err.message
+          });
+        });
       }
     });
 

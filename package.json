@@ -14,6 +14,7 @@
     "appId": "com.orca.proxy",
     "productName": "Orca Proxy",
     "forceCodeSigning": false,
+    "asarUnpack": "skills/**/*",
     "directories": {
       "output": "release"
     },
@@ -22,16 +23,11 @@
       "dist/bundle.js",
       "public/**/*",
       "assets/**/*",
+      "skills/**/*",
       "package.json"
     ],
     "win": {
       "target": [
-        {
-          "target": "dir",
-          "arch": [
-            "x64"
-          ]
-        },
         {
           "target": "nsis",
           "arch": [
@@ -39,6 +35,14 @@
           ]
         }
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Orca Proxy",
+      "runAfterFinish": true
     }
   },
   "dependencies": {

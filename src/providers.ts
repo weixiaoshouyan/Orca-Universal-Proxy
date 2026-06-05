@@ -201,6 +201,7 @@ export interface RuntimeConfig {
   fallbackProviderIds?: string[];
   modelPricing?: Record<string, { inputPrice: number; outputPrice: number }>;
   mcpServers?: Record<string, any>;
+  appPaths?: Record<string, string>;
 }
 
 const _isPkg = !!(process as any).pkg;
@@ -228,6 +229,7 @@ function defaultConfig(): RuntimeConfig {
     autoSyncInterval: "never",
     cacheEnabled: true,
     fallbackProviderIds: [],
+    appPaths: {},
     modelPricing: {
       "deepseek-chat": { inputPrice: 0.14, outputPrice: 0.28 },
       "deepseek-reasoner": { inputPrice: 0.55, outputPrice: 2.19 },

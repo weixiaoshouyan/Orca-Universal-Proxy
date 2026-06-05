@@ -21,7 +21,7 @@ export default function Apps({ lang }: AppsProps) {
     }
   });
 
-  useEffect(() => {
+  const refreshAppsList = (updatedAppId?: string) => {
     api.get('/api/apps').then(res => {
       const mappedApps = res.data.map((app: any) => ({
         ...app,
@@ -29,7 +29,15 @@ export default function Apps({ lang }: AppsProps) {
         color: app.id.includes('claude') ? 'bg-orange-500' : (app.id === 'cursor' ? 'bg-blue-600' : (app.id === 'trae' ? 'bg-indigo-500' : (app.id === 'cline' ? 'bg-amber-600' : (app.id === 'roo-code' ? 'bg-purple-600' : 'bg-green-500'))))
       }));
       setApps(mappedApps);
+      if (updatedAppId) {
+        const updated = mappedApps.find((a: any) => a.id === updatedAppId);
+        if (updated) setSelectedApp(updated);
+      }
     }).catch(console.error);
+  };
+
+  useEffect(() => {
+    refreshAppsList();
 
     api.get('/api/providers').then(res => {
       setProviders(res.data);
@@ -64,6 +72,34 @@ export default function Apps({ lang }: AppsProps) {
     setAppOverrides(newOverrides);
     localStorage.setItem('app_provider_overrides', JSON.stringify(newOverrides));
     setIsConfigOpen(false);
+  };
+
+  const handleChooseAppPath = async () => {
+    if (!selectedApp) return;
+    try {
+      const res = await api.post(`/api/apps/${selectedApp.id}/choose-path`);
+      if (res.data.cancelled) return;
+      if (res.data.ok && res.data.path) {
+        refreshAppsList(selectedApp.id);
+      }
+    } catch (e: any) {
+      alert((lang === 'en' ? 'Failed to select path: ' : '自选路径失败: ') + (e.response?.data?.error || e.message));
+    }
+  };
+
+  const handleClearAppPath = async () => {
+    if (!selectedApp) return;
+    const confirmMsg = lang === 'en' 
+      ? 'Are you sure you want to clear the custom path and restore default system detection?' 
+      : '您确定要清除该应用的自定义路径并恢复系统默认检测吗？';
+    if (confirm(confirmMsg)) {
+      try {
+        await api.delete(`/api/apps/${selectedApp.id}/path`);
+        refreshAppsList(selectedApp.id);
+      } catch (e: any) {
+        alert(e.response?.data?.error || e.message);
+      }
+    }
   };
 
   return (
@@ -121,9 +157,8 @@ export default function Apps({ lang }: AppsProps) {
                 </button>
                 <button 
                   onClick={() => openConfigModal(app)}
-                  disabled={!app.installed}
-                  className="p-2 border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 rounded-xl text-[var(--color-text-secondary)] transition-colors cursor-pointer" 
-                  title={lang === 'en' ? 'Bind Upstream Provider' : '配置绑定提供商'}
+                  className="p-2 border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-hover)] rounded-xl text-[var(--color-text-secondary)] transition-colors cursor-pointer" 
+                  title={lang === 'en' ? 'Configure App Settings' : '配置应用设置'}
                 >
                   <Settings className="w-4 h-4" />
                 </button>
@@ -162,6 +197,38 @@ export default function Apps({ lang }: AppsProps) {
                     ? 'Once set, when launching this app from here, its traffic will be forced through the selected provider, overriding system settings and routing rules.' 
                     : '设定后，当通过此界面启动该应用时，该应用内的流量将强行路由至选定的提供商，不受全局激活节点和路由规则影响。'}
                 </p>
+              </div>
+
+              <div className="border-t border-[var(--color-border-base)]/55 pt-4">
+                <label className="block text-xs font-bold text-[var(--color-text-secondary)] mb-1.5">
+                  {lang === 'en' ? 'Custom Executable / Config Path' : '自定义可执行程序 / 配置文件路径'}
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    placeholder={lang === 'en' ? 'System default detection' : '未设置自定义路径，将使用系统默认检测'}
+                    value={selectedApp.path || ''}
+                    className="flex-1 px-3 py-2 bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)] rounded-xl text-xs font-mono text-[var(--color-text-secondary)] outline-none overflow-x-auto truncate"
+                    title={selectedApp.path || ''}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleChooseAppPath}
+                    className="px-3.5 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer transition-all shrink-0"
+                  >
+                    {lang === 'en' ? 'Browse...' : '自选路径...'}
+                  </button>
+                </div>
+                {selectedApp.isCustomPath && (
+                  <button
+                    type="button"
+                    onClick={handleClearAppPath}
+                    className="mt-2 text-xs font-bold text-red-500 hover:text-red-600 cursor-pointer flex items-center gap-1 transition-colors"
+                  >
+                    {lang === 'en' ? 'Restore Default Detection' : '清除自定义路径 (恢复系统默认检测)'}
+                  </button>
+                )}
               </div>
             </div>
 
