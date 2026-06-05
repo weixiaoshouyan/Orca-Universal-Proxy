@@ -428,6 +428,14 @@ app.post("/api/reset-billing", (_req, res) => {
   }
 });
 
+app.get("/api/mcp/tools", (_req, res) => {
+  try {
+    res.json(getAllMCPTools());
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 // ---- Skills & Agents Management ----
 app.get("/api/skills", (_req, res) => {
   try {
@@ -854,7 +862,7 @@ const SKILLS_DIR = path.join(_BASE_DIR, "data", "skills");
 
 function initSkillsDirectory() {
   try {
-    let srcSkillsDir = path.join(_devDir, "skills");
+    let srcSkillsDir = process.env.ORCA_SKILLS_SRC_DIR || path.join(_devDir, "skills");
     if (!fs.existsSync(srcSkillsDir) && _isElectron) {
       const unpackedDir = __dirname.replace("app.asar", "app.asar.unpacked");
       srcSkillsDir = path.join(unpackedDir, "..", "skills");
@@ -862,6 +870,8 @@ function initSkillsDirectory() {
         srcSkillsDir = path.join(__dirname, "..", "skills");
       }
     }
+    
+    log("info", `[Skills] Calculated srcSkillsDir path: ${srcSkillsDir} (Exists: ${fs.existsSync(srcSkillsDir)})`);
 
     if (!fs.existsSync(SKILLS_DIR)) {
       fs.mkdirSync(SKILLS_DIR, { recursive: true });
@@ -2477,35 +2487,123 @@ function scanApps() {
   // OpenCode
   let opencode = false; let opencodePath = "";
   try { opencodePath = execSync("where opencode 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; opencode = true; } catch(e) {}
-  const opencodeDesktopPath = findExe([localApp + "\\ai.opencode.desktop", localApp + "\\Programs\\opencode"], ["OpenCode.exe", "opencode.exe"]);
+  const opencodeDesktopPath = findExe([
+    localApp + "\\ai.opencode.desktop", 
+    localApp + "\\Programs\\opencode",
+    localApp + "\\Programs\\OpenCode",
+    programFiles + "\\OpenCode",
+    programFilesX86 + "\\OpenCode"
+  ], ["OpenCode.exe", "opencode.exe"]);
   apps.push({ id: "opencode-cli", name: "OpenCode CLI", icon: "terminal", installed: opencode, path: opencodePath, running: procs.toLowerCase().includes("opencode"), description: "OpenCode AI coding agent CLI", type: "cli" });
   apps.push({ id: "opencode-desktop", name: "OpenCode Desktop", icon: "monitor", installed: !!opencodeDesktopPath, path: opencodeDesktopPath, running: procs.includes("OpenCode"), description: "OpenCode desktop application", type: "desktop" });
 
   // Cursor
-  const cursorPath = findExe([localApp + "\\Programs\\cursor"], ["Cursor.exe"]);
+  const cursorPath = findExe([
+    localApp + "\\Programs\\cursor",
+    localApp + "\\Programs\\Cursor",
+    programFiles + "\\Cursor",
+    programFilesX86 + "\\Cursor"
+  ], ["Cursor.exe"]);
   apps.push({ id: "cursor", name: "Cursor", icon: "code", installed: !!cursorPath, path: cursorPath, running: procs.includes("Cursor"), description: "AI-powered code editor", type: "desktop" });
 
   // Trae
-  const traePath = findExe([localApp + "\\Programs\\trae", localApp + "\\Programs\\Trae"], ["Trae.exe", "trae.exe"]);
+  const traePath = findExe([
+    localApp + "\\Programs\\trae", 
+    localApp + "\\Programs\\Trae",
+    programFiles + "\\Trae",
+    programFiles + "\\trae",
+    programFilesX86 + "\\Trae",
+    programFilesX86 + "\\trae"
+  ], ["Trae.exe", "trae.exe"]);
   apps.push({ id: "trae", name: "Trae", icon: "code", installed: !!traePath, path: traePath, running: procs.includes("Trae"), description: "ByteDance AI code editor", type: "desktop" });
 
   // VS Code
   let vscode = false; let vscodePath = "";
-  try { vscodePath = execSync("where code 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; vscode = true; } catch(e) {}
+  try { 
+    vscodePath = execSync("where code 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; 
+    if (vscodePath && fs.existsSync(vscodePath)) vscode = true; 
+  } catch(e) {}
+  if (!vscode) {
+    vscodePath = findExe([
+      localApp + "\\Programs\\Microsoft VS Code",
+      programFiles + "\\Microsoft VS Code",
+      programFilesX86 + "\\Microsoft VS Code",
+      localApp + "\\Programs\\Microsoft VS Code Insiders",
+      programFiles + "\\Microsoft VS Code Insiders",
+      programFilesX86 + "\\Microsoft VS Code Insiders"
+    ], ["Code.exe", "Code - Insiders.exe"]);
+    if (vscodePath) vscode = true;
+  }
   apps.push({ id: "vscode", name: "VS Code", icon: "file-code", installed: vscode, path: vscodePath, running: procs.includes("Code"), description: "Visual Studio Code editor", type: "desktop" });
 
   // Antigravity
-  const antigravityPath = findExe([localApp + "\\Programs\\antigravity"], ["Antigravity.exe"]);
+  const antigravityPath = findExe([
+    localApp + "\\Programs\\antigravity",
+    programFiles + "\\Antigravity",
+    programFilesX86 + "\\Antigravity"
+  ], ["Antigravity.exe"]);
   apps.push({ id: "antigravity", name: "Antigravity", icon: "monitor", installed: !!antigravityPath, path: antigravityPath, running: procs.includes("Antigravity"), description: "Antigravity AI assistant", type: "desktop" });
 
   // Cline
-  const clineConfigPath = path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "claude_dev_settings.json");
-  const clineInstalled = fs.existsSync(clineConfigPath) || fs.existsSync(path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev"));
+  let clineInstalled = false;
+  let clineConfigPath = path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "claude_dev_settings.json");
+  const clineDirs = [
+    path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev"),
+    path.join(appData, "Cursor", "User", "globalStorage", "saoudrizwan.claude-dev"),
+    path.join(appData, "Code - Insiders", "User", "globalStorage", "saoudrizwan.claude-dev")
+  ];
+  const clineJsonFiles = [
+    path.join(appData, "Code", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "claude_dev_settings.json"),
+    path.join(appData, "Cursor", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "claude_dev_settings.json"),
+    path.join(appData, "Code - Insiders", "User", "globalStorage", "saoudrizwan.claude-dev", "settings", "claude_dev_settings.json")
+  ];
+  for (const p of clineJsonFiles) {
+    if (fs.existsSync(p)) {
+      clineInstalled = true;
+      clineConfigPath = p;
+      break;
+    }
+  }
+  if (!clineInstalled) {
+    for (const d of clineDirs) {
+      if (fs.existsSync(d)) {
+        clineInstalled = true;
+        clineConfigPath = path.join(d, "settings", "claude_dev_settings.json");
+        break;
+      }
+    }
+  }
   apps.push({ id: "cline", name: "Cline", icon: "code", installed: clineInstalled, path: clineConfigPath, running: false, description: "Autonomous coding agent for VS Code (Claude Dev)", type: "desktop" });
 
   // Roo Code
-  const rooConfigPath = path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline", "settings", "roo_cline_settings.json");
-  const rooInstalled = fs.existsSync(rooConfigPath) || fs.existsSync(path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline"));
+  let rooInstalled = false;
+  let rooConfigPath = path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline", "settings", "roo_cline_settings.json");
+  const rooDirs = [
+    path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline"),
+    path.join(appData, "Cursor", "User", "globalStorage", "roodev.roo-cline"),
+    path.join(appData, "Code - Insiders", "User", "globalStorage", "roodev.roo-cline")
+  ];
+  const rooJsonFiles = [
+    path.join(appData, "Code", "User", "globalStorage", "roodev.roo-cline", "settings", "roo_cline_settings.json"),
+    path.join(appData, "Cursor", "User", "globalStorage", "roodev.roo-cline", "settings", "roo_cline_settings.json"),
+    path.join(appData, "Code - Insiders", "User", "globalStorage", "roodev.roo-cline", "settings", "roo_cline_settings.json")
+  ];
+  for (const p of rooJsonFiles) {
+    if (fs.existsSync(p)) {
+      rooInstalled = true;
+      rooConfigPath = p;
+      break;
+    }
+  }
+  if (!rooInstalled) {
+    for (const d of rooDirs) {
+      if (fs.existsSync(d)) {
+        rooInstalled = true;
+        rooConfigPath = path.join(d, "settings", "roo_cline_settings.json");
+        break;
+      }
+    }
+  }
   apps.push({ id: "roo-code", name: "Roo Code", icon: "code", installed: rooInstalled, path: rooConfigPath, running: false, description: "Autonomous AI coding assistant for VS Code (Roo Cline)", type: "desktop" });
 
   // Apply user custom app paths overrides from config

@@ -5,6 +5,12 @@ import { translate as t } from '../i18n';
 import type { Language } from '../i18n';
 import * as echarts from 'echarts';
 
+const getTokenValue = (val: any): number => {
+  if (typeof val === 'number') return val;
+  if (val && typeof val === 'object') return val.total || 0;
+  return 0;
+};
+
 interface DashboardProps {
   lang: Language;
 }
@@ -15,18 +21,97 @@ export default function Dashboard({ lang }: DashboardProps) {
   const [viewType, setViewType] = useState<'chart' | 'list'>('chart');
   const [timeUnit, setTimeUnit] = useState<'year' | 'month'>('month');
   const [displayMode, setDisplayMode] = useState<'total' | 'single'>('total');
-  const [selectedMonth] = useState('2026-06');
-  const [logs, setLogs] = useState<any[]>([]);
+  const [selectedMonth, setSelectedMonth] = useState('2026-06');
+  const [monthMenuOpen, setMonthMenuOpen] = useState(false);
   const [themeChanged, setThemeChanged] = useState(0);
+  const [activeModelIds, setActiveModelIds] = useState<Set<string>>(new Set());
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [sortField, setSortField] = useState<string>('date');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   const chartRef = useRef<HTMLDivElement>(null);
+  const calendarRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedMonth, timeUnit]);
+
+  const getTableData = () => {
+    const rows: { date: string; model: string; total: number; cached: number; uncached: number }[] = [];
+    Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+      const matchesPeriod = timeUnit === 'year'
+        ? dateStr.startsWith(selectedMonth.slice(0, 4))
+        : dateStr.startsWith(selectedMonth);
+
+      if (matchesPeriod) {
+        Object.entries(dayData).forEach(([model, val]: any) => {
+          if (activeModelIds.size === 0 || activeModelIds.has(model)) {
+            let total = 0;
+            let cached = 0;
+            let uncached = 0;
+
+            if (typeof val === 'number') {
+              total = val;
+              cached = 0;
+              uncached = val;
+            } else if (val && typeof val === 'object') {
+              total = val.total || 0;
+              cached = val.cached || 0;
+              uncached = val.uncached || 0;
+            }
+
+            rows.push({ date: dateStr, model, total, cached, uncached });
+          }
+        });
+      }
+    });
+    return rows;
+  };
+
+  const rawTableRows = getTableData();
+
+  const handleSort = (field: string) => {
+    if (sortField === field) {
+      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDirection('desc');
+    }
+    setCurrentPage(1);
+  };
+
+  const sortedTableRows = [...rawTableRows].sort((a: any, b: any) => {
+    const valA = a[sortField];
+    const valB = b[sortField];
+    if (typeof valA === 'string') {
+      return sortDirection === 'asc' ? valA.localeCompare(valB) : valB.localeCompare(valA);
+    } else {
+      return sortDirection === 'asc' ? valA - valB : valB - valA;
+    }
+  });
+
+  const totalCount = sortedTableRows.length;
+  const totalPages = Math.ceil(totalCount / pageSize) || 1;
+  const paginatedRows = sortedTableRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // Poll stats and logs
   useEffect(() => {
     const fetchData = () => {
       api.get('/api/stats').then(res => setStats(res.data)).catch(console.error);
       api.get('/api/billing-history').then(res => setBillingData(res.data)).catch(console.error);
-      api.get('/api/logs?limit=5').then(res => setLogs(res.data)).catch(console.error);
+      api.get('/api/providers').then(res => {
+        const activeIds = new Set<string>();
+        res.data.forEach((p: any) => {
+          if (p.configured) {
+            p.models.forEach((m: any) => {
+              activeIds.add(m.id);
+            });
+          }
+        });
+        setActiveModelIds(activeIds);
+      }).catch(console.error);
     };
     fetchData();
     const interval = setInterval(fetchData, 5000);
@@ -42,14 +127,80 @@ export default function Dashboard({ lang }: DashboardProps) {
     return () => observer.disconnect();
   }, []);
 
-  // Prepare chart data
-  const [yearStr, monthStr] = selectedMonth.split('-');
-  const days = getDaysInMonth(parseInt(yearStr), parseInt(monthStr));
+  // Listen for clicks outside the calendar dropdown
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (calendarRef.current && !calendarRef.current.contains(event.target as Node)) {
+        setMonthMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
-  // Extract all models from data to build series
+  // 动态获取有数据的期间列表（月份或年份）
+  const getAvailablePeriods = () => {
+    const periods = new Set<string>();
+    const today = new Date();
+    
+    if (timeUnit === 'year') {
+      periods.add(String(today.getFullYear()));
+      periods.add('2026'); // 默认必须有的年份
+      Object.keys(billingData).forEach(dateStr => {
+        const y = dateStr.slice(0, 4);
+        if (y.match(/^\d{4}$/)) {
+          periods.add(y);
+        }
+      });
+    } else {
+      const currentMonthStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      periods.add(currentMonthStr);
+      periods.add('2026-06'); // 默认必须有的月份
+      Object.keys(billingData).forEach(dateStr => {
+        const m = dateStr.slice(0, 7);
+        if (m.match(/^\d{4}-\d{2}$/)) {
+          periods.add(m);
+        }
+      });
+    }
+    return Array.from(periods).sort().reverse();
+  };
+
+  const handlePeriodSelect = (p: string) => {
+    if (timeUnit === 'year') {
+      const currentMonthPart = selectedMonth.slice(5, 7) || '06';
+      setSelectedMonth(`${p}-${currentMonthPart}`);
+    } else {
+      setSelectedMonth(p);
+    }
+    setMonthMenuOpen(false);
+  };
+
+  // 根据“年”或“月”维度准备 X 轴数据
+  const [yearStr, monthStr] = selectedMonth.split('-');
+  const selectedYear = parseInt(yearStr);
+  const selectedMonthNum = parseInt(monthStr);
+
+  const getChartXAxis = () => {
+    if (timeUnit === 'year') {
+      // 显示该年份的 12 个月
+      return Array.from({ length: 12 }, (_, i) => `${selectedYear}-${String(i + 1).padStart(2, '0')}`);
+    } else {
+      // 显示该月份的每日日期
+      return getDaysInMonth(selectedYear, selectedMonthNum);
+    }
+  };
+
+  const days = getChartXAxis();
+
+  // Extract all models from data to build series (filtered by active model IDs)
   const allModelsSet = new Set<string>();
   Object.values(billingData).forEach((dayData: any) => {
-    Object.keys(dayData).forEach(model => allModelsSet.add(model));
+    Object.keys(dayData).forEach(model => {
+      if (activeModelIds.has(model)) {
+        allModelsSet.add(model);
+      }
+    });
   });
   const modelsList = Array.from(allModelsSet);
 
@@ -72,194 +223,242 @@ export default function Dashboard({ lang }: DashboardProps) {
   };
 
   useEffect(() => {
-    if (viewType !== 'chart' || !chartRef.current) return;
-
     const isDark = document.documentElement.classList.contains('dark');
     const textColor = isDark ? '#94a3b8' : '#475569';
-    const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-    const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
 
-    const myChart = echarts.init(chartRef.current);
+    if (viewType === 'chart' && chartRef.current) {
+      const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
+      const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+      const myChart = echarts.init(chartRef.current);
 
-    // Build series data
-    const barSeries = modelsList.map((model, idx) => {
-      const data = days.map(day => {
-        return billingData[day]?.[model] || 0;
+      // Build series data
+      const lineSeriesList = modelsList.map((model, idx) => {
+        const data = days.map(day => {
+          if (timeUnit === 'year') {
+            let sum = 0;
+            Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+              if (dateStr.startsWith(day)) {
+                sum += getTokenValue(dayData[model]);
+              }
+            });
+            return sum;
+          } else {
+            return getTokenValue(billingData[day]?.[model]);
+          }
+        });
+
+        const color = getModelColor(model, idx);
+        return {
+          name: model,
+          type: 'line' as const,
+          smooth: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          showSymbol: true,
+          itemStyle: {
+            color: color,
+            borderColor: '#ffffff',
+            borderWidth: 1.5
+          },
+          lineStyle: {
+            width: 2.5,
+            color: color
+          },
+          data
+        };
       });
-      return {
-        name: model,
-        type: 'bar' as const,
-        stack: 'total',
-        barWidth: '35%',
+
+      const lineData = days.map(day => {
+        let sum = 0;
+        modelsList.forEach(model => {
+          if (timeUnit === 'year') {
+            Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+              if (dateStr.startsWith(day)) {
+                sum += getTokenValue(dayData[model]);
+              }
+            });
+          } else {
+            sum += getTokenValue(billingData[day]?.[model]);
+          }
+        });
+        return sum;
+      });
+
+      const lineSeries = {
+        name: 'Token 总消耗',
+        type: 'line' as const,
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 8,
+        showSymbol: true,
         itemStyle: {
-          color: getModelColor(model, idx),
-          borderRadius: idx === modelsList.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]
+          color: '#3b82f6',
+          borderColor: '#ffffff',
+          borderWidth: 2
         },
-        data
+        lineStyle: {
+          width: 3,
+          color: '#3b82f6',
+          shadowColor: 'rgba(59, 130, 246, 0.3)',
+          shadowBlur: 8,
+          shadowOffsetY: 4
+        },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
+            { offset: 1, color: 'rgba(59, 130, 246, 0)' }
+          ])
+        },
+        data: lineData
       };
-    });
 
-    const lineData = days.map(day => {
-      let sum = 0;
-      modelsList.forEach(model => {
-        sum += (billingData[day]?.[model] || 0);
-      });
-      return sum;
-    });
+      const series = displayMode === 'total' ? [...lineSeriesList, lineSeries] : lineSeriesList;
 
-    const lineSeries = {
-      name: 'Token 总消耗',
-      type: 'line' as const,
-      smooth: true,
-      symbol: 'circle',
-      symbolSize: 8,
-      showSymbol: true,
-      itemStyle: {
-        color: '#3b82f6',
-        borderColor: '#ffffff',
-        borderWidth: 2
-      },
-      lineStyle: {
-        width: 3,
-        color: '#3b82f6',
-        shadowColor: 'rgba(59, 130, 246, 0.3)',
-        shadowBlur: 8,
-        shadowOffsetY: 4
-      },
-      areaStyle: {
-        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-          { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
-          { offset: 1, color: 'rgba(59, 130, 246, 0)' }
-        ])
-      },
-      data: lineData
-    };
-
-    const series = displayMode === 'total' ? [...barSeries, lineSeries] : barSeries;
-
-    const option: echarts.EChartsOption = {
-      backgroundColor: 'transparent',
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: {
-          type: 'shadow'
-        },
-        backgroundColor: isDark ? '#151824' : '#ffffff',
-        borderColor: isDark ? '#1f2333' : '#e2e8f0',
-        borderWidth: 1,
-        textStyle: {
-          color: isDark ? '#f8fafc' : '#0f172a',
-          fontFamily: 'system-ui',
-          fontSize: 12
-        },
-        formatter: (params: any) => {
-          let date = params[0].axisValue;
-          let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
-          
-          const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
-          const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
-          
-          const sortedParams = [];
-          if (lineItem && displayMode === 'total') {
-            sortedParams.push(lineItem);
-          }
-          sortedParams.push(...barItems);
-          
-          sortedParams.forEach((item: any) => {
-            const val = item.value || 0;
-            const color = item.color;
-            tooltipHtml += `
-              <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
-                <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
-                  <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
-                  ${item.seriesName}
-                </span>
-                <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
-              </div>
-            `;
-          });
-          
-          return tooltipHtml;
-        }
-      },
-      legend: {
-        show: true,
-        top: '2%',
-        left: 'center',
-        textStyle: {
-          color: textColor,
-          fontSize: 11,
-          fontFamily: 'system-ui'
-        },
-        itemGap: 16
-      },
-      grid: {
-        top: '15%',
-        left: '2%',
-        right: '2%',
-        bottom: '8%',
-        containLabel: true
-      },
-      xAxis: {
-        type: 'category',
-        data: days,
-        axisLine: {
-          lineStyle: {
-            color: gridBorderColor
+      const option: echarts.EChartsOption = {
+        backgroundColor: 'transparent',
+        tooltip: {
+          trigger: 'axis',
+          axisPointer: {
+            type: 'shadow'
+          },
+          backgroundColor: isDark ? '#151824' : '#ffffff',
+          borderColor: isDark ? '#1f2333' : '#e2e8f0',
+          borderWidth: 1,
+          textStyle: {
+            color: isDark ? '#f8fafc' : '#0f172a',
+            fontFamily: 'system-ui',
+            fontSize: 12
+          },
+          formatter: (params: any) => {
+            let date = params[0].axisValue;
+            let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
+            
+            const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
+            const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
+            
+            const sortedParams = [];
+            if (lineItem && displayMode === 'total') {
+              sortedParams.push(lineItem);
+            }
+            sortedParams.push(...barItems);
+            
+            sortedParams.forEach((item: any) => {
+              const val = item.value || 0;
+              const color = item.color;
+              tooltipHtml += `
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
+                  <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
+                    ${item.seriesName}
+                  </span>
+                  <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
+                </div>
+              `;
+            });
+            
+            return tooltipHtml;
           }
         },
-        axisLabel: {
-          color: textColor,
-          fontSize: 10,
-          fontFamily: 'monospace',
-          interval: 2
+        legend: {
+          show: false,
+          top: '2%',
+          left: 'center',
+          textStyle: {
+            color: textColor,
+            fontSize: 11,
+            fontFamily: 'system-ui'
+          },
+          itemGap: 16
         },
-        axisTick: {
-          show: false
-        }
-      },
-      yAxis: {
-        type: 'value',
-        splitLine: {
-          lineStyle: {
-            color: splitLineColor,
-            type: 'dashed'
+        grid: {
+          top: '15%',
+          left: '2%',
+          right: '2%',
+          bottom: '8%',
+          containLabel: true
+        },
+        xAxis: {
+          type: 'category',
+          data: days,
+          axisLine: {
+            lineStyle: {
+              color: gridBorderColor
+            }
+          },
+          axisLabel: {
+            color: textColor,
+            fontSize: 10,
+            fontFamily: 'monospace',
+            interval: timeUnit === 'year' ? 0 : 2
+          },
+          axisTick: {
+            show: false
           }
         },
-        axisLabel: {
-          color: textColor,
-          fontSize: 10,
-          fontFamily: 'monospace',
-          formatter: (value: number) => {
-            if (value === 0) return '0';
-            return (value / 1000) + 'k';
+        yAxis: {
+          type: 'value',
+          splitLine: {
+            lineStyle: {
+              color: splitLineColor,
+              type: 'dashed'
+            }
+          },
+          axisLabel: {
+            color: textColor,
+            fontSize: 10,
+            fontFamily: 'monospace',
+            formatter: (value: number) => {
+              if (value === 0) return '0';
+              return (value / 1000) + 'k';
+            }
           }
-        }
-      },
-      series
-    };
+        },
+        series
+      };
 
-    myChart.setOption(option);
-
-    const handleResize = () => myChart.resize();
-    window.addEventListener('resize', handleResize);
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      myChart.dispose();
-    };
-  }, [viewType, billingData, days, displayMode, themeChanged]);
+      myChart.setOption(option);
+      const handleResize = () => myChart.resize();
+      window.addEventListener('resize', handleResize);
+      return () => {
+        window.removeEventListener('resize', handleResize);
+        myChart.dispose();
+      };
+    }
+  }, [viewType, billingData, days, displayMode, themeChanged, timeUnit]);
 
   const handleExport = () => {
-    let csvContent = 'data:text/csv;charset=utf-8,Date,Model,Tokens\n';
-    Object.entries(billingData).forEach(([date, dayData]: any) => {
-      Object.entries(dayData).forEach(([model, val]: any) => {
-        csvContent += `${date},${model},${val}\n`;
+    let csvContent = '\uFEFF'; // Add BOM for Excel UTF-8 Chinese compatibility
+    if (timeUnit === 'year') {
+      csvContent += '月份,模型,Tokens\n';
+      days.forEach(day => {
+        modelsList.forEach(model => {
+          let sum = 0;
+          Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+            if (dateStr.startsWith(day)) {
+              sum += getTokenValue(dayData[model]);
+            }
+          });
+          if (sum > 0) {
+            csvContent += `${day},${model},${sum}\n`;
+          }
+        });
       });
-    });
-    const encodedUri = encodeURI(csvContent);
+    } else {
+      csvContent += '日期,模型,Tokens\n';
+      days.forEach(day => {
+        modelsList.forEach(model => {
+          const val = getTokenValue(billingData[day]?.[model]);
+          if (val > 0) {
+            csvContent += `${day},${model},${val}\n`;
+          }
+        });
+      });
+    }
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `orca_billing_${selectedMonth}.csv`);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `orca_billing_${timeUnit === 'year' ? selectedYear : selectedMonth}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -277,7 +476,7 @@ export default function Dashboard({ lang }: DashboardProps) {
   }
 
   const overallTotalTokens = Object.values(billingData).reduce((acc: number, dayData: any) => {
-    return acc + Object.values(dayData).reduce((sum: number, val: any) => sum + (val || 0), 0);
+    return acc + Object.values(dayData).reduce((sum: number, val: any) => sum + getTokenValue(val), 0);
   }, 0);
 
   const statCards = [
@@ -317,9 +516,9 @@ export default function Dashboard({ lang }: DashboardProps) {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="w-full">
         
-        <div className="lg:col-span-2 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-6 flex flex-col">
+        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-6 flex flex-col w-full">
           
           <div className="flex items-center justify-between mb-4 select-none">
             <div className="flex items-baseline gap-2">
@@ -349,10 +548,40 @@ export default function Dashboard({ lang }: DashboardProps) {
                 </button>
               </div>
 
-              <div className="flex items-center gap-1.5 bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)] px-3 py-2 rounded-lg text-xs font-bold text-[var(--color-text-primary)] shadow-sm select-none cursor-pointer">
+              <div 
+                ref={calendarRef}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMonthMenuOpen(!monthMenuOpen);
+                }}
+                className="flex items-center gap-1.5 bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)] px-3 py-2 rounded-lg text-xs font-bold text-[var(--color-text-primary)] shadow-sm select-none cursor-pointer relative"
+              >
                 <Calendar className="w-3.5 h-3.5 text-gray-500" />
-                <span>{selectedMonth}</span>
+                <span>{timeUnit === 'year' ? selectedMonth.slice(0, 4) : selectedMonth}</span>
                 <ChevronDown className="w-3 h-3 opacity-60" />
+
+                {monthMenuOpen && (
+                  <div 
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-full right-0 mt-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-50 w-36 py-1 max-h-48 overflow-y-auto"
+                  >
+                    {getAvailablePeriods().map(p => {
+                      const isSelected = (timeUnit === 'year' ? selectedMonth.startsWith(p) : selectedMonth === p);
+                      return (
+                        <div 
+                          key={p}
+                          onClick={() => handlePeriodSelect(p)}
+                          className={`px-3 py-2 text-xs hover:bg-[var(--color-bg-hover)] cursor-pointer flex justify-between items-center transition-colors ${
+                            isSelected ? 'bg-[var(--color-bg-hover)] font-bold text-[var(--color-primary)]' : 'text-[var(--color-text-primary)]'
+                          }`}
+                        >
+                          <span>{p}</span>
+                          {isSelected && <span className="text-[var(--color-primary)] font-bold">✓</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="flex bg-[var(--color-bg-sidebar)] p-1 rounded-lg border border-[var(--color-border-base)] text-xs font-bold">
@@ -419,76 +648,146 @@ export default function Dashboard({ lang }: DashboardProps) {
             ))}
           </div>
 
-          <div className="flex-1 min-h-[300px] w-full relative">
+          <div className="w-full relative mt-4">
             {viewType === 'chart' ? (
-              <div ref={chartRef} className="absolute inset-0 w-full h-full" />
+              <div ref={chartRef} className="w-full h-[400px]" />
             ) : (
-              <div className="absolute inset-0 w-full h-full overflow-auto">
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-[var(--color-border-base)] text-[var(--color-text-muted)] font-bold">
-                      <th className="py-2.5 px-3">日期</th>
-                      {modelsList.map(model => (
-                        <th key={model} className="py-2.5 px-3">{model}</th>
-                      ))}
-                      {displayMode === 'total' && <th className="py-2.5 px-3 text-right">总计</th>}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {days.map(day => {
-                      let dayTotal = 0;
-                      let hasData = false;
-                      const modelVals = modelsList.map(model => {
-                        const val = billingData[day]?.[model] || 0;
-                        if (val > 0) hasData = true;
-                        dayTotal += val;
-                        return val;
-                      });
-
-                      if (!hasData) return null;
-
-                      return (
-                        <tr key={day} className="border-b border-[var(--color-border-base)]/50 hover:bg-[var(--color-bg-hover)]/30 text-[var(--color-text-primary)] font-medium">
-                          <td className="py-2.5 px-3 font-mono">{day}</td>
-                          {modelVals.map((val, idx) => (
-                            <td key={idx} className="py-2.5 px-3">{val > 0 ? val.toLocaleString() : '-'}</td>
-                          ))}
-                          {displayMode === 'total' && <td className="py-2.5 px-3 text-right font-extrabold text-blue-600 dark:text-blue-400">{dayTotal.toLocaleString()}</td>}
+              <div className="w-full flex flex-col">
+                <div className="overflow-x-auto border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] max-h-[400px] overflow-y-auto relative">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="text-xs font-bold text-[var(--color-text-secondary)] select-none">
+                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('date')}>
+                          <div className="flex items-center gap-1">
+                            日期
+                            <span className="text-gray-400">
+                              {sortField === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('model')}>
+                          <div className="flex items-center gap-1">
+                            模型
+                            <span className="text-gray-400">
+                              {sortField === 'model' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('total')}>
+                          <div className="flex items-center gap-1">
+                            总 Token 数
+                            <span className="text-gray-400">
+                              {sortField === 'total' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('cached')}>
+                          <div className="flex items-center gap-1">
+                            输入 (命中缓存) Token 数
+                            <span className="text-gray-400">
+                              {sortField === 'cached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('uncached')}>
+                          <div className="flex items-center gap-1">
+                            输入 (未命中缓存) Token 数
+                            <span className="text-gray-400">
+                              {sortField === 'uncached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                            </span>
+                          </div>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[var(--color-border-base)]/50 text-[13px] font-medium text-[var(--color-text-primary)]">
+                      {paginatedRows.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} className="p-8 text-center text-[var(--color-text-muted)]">
+                            暂无消耗记录
+                          </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                      ) : (
+                        paginatedRows.map((row, idx) => (
+                          <tr key={idx} className="hover:bg-[var(--color-bg-hover)]/30 transition-colors">
+                            <td className="p-4 font-mono">{row.date}</td>
+                            <td className="p-4">
+                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)]">
+                                {row.model}
+                              </span>
+                            </td>
+                            <td className="p-4 font-mono font-bold text-blue-600 dark:text-blue-400">{row.total.toLocaleString()}</td>
+                            <td className="p-4 font-mono text-emerald-600 dark:text-emerald-400">{row.cached.toLocaleString()}</td>
+                            <td className="p-4 font-mono text-amber-600 dark:text-amber-400">{row.uncached.toLocaleString()}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+ 
+                {/* 分页控制栏 */}
+                {totalCount > 0 && (
+                  <div className="flex items-center justify-between mt-4 px-1 select-none text-xs font-bold text-[var(--color-text-secondary)] font-sans">
+                    <div>
+                      共 {totalCount} 条
+                    </div>
+                    <div className="flex items-center gap-4">
+                      {/* 页码选择 */}
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          disabled={currentPage === 1}
+                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                          className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
+                        >
+                          &lt;
+                        </button>
+                        {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                          <button
+                            key={p}
+                            onClick={() => setCurrentPage(p)}
+                            className={`w-7 h-7 rounded-lg border text-center flex items-center justify-center cursor-pointer transition-all ${
+                              currentPage === p
+                                ? 'bg-blue-500 border-blue-500 text-white shadow-sm font-bold'
+                                : 'border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'
+                            }`}
+                          >
+                            {p}
+                          </button>
+                        ))}
+                        <button
+                          disabled={currentPage === totalPages}
+                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                          className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
+                        >
+                          &gt;
+                        </button>
+                      </div>
+ 
+                      {/* 每页数量选择 */}
+                      <div className="relative flex items-center">
+                        <select
+                          value={pageSize}
+                          onChange={(e) => {
+                            setPageSize(Number(e.target.value));
+                            setCurrentPage(1);
+                          }}
+                          className="appearance-none bg-[var(--color-bg-card)] dark:bg-slate-900 border border-[var(--color-border-base)] rounded-lg pl-3 pr-8 py-1.5 font-bold text-[var(--color-text-primary)] cursor-pointer focus:outline-none hover:border-[var(--color-primary)] transition-all"
+                        >
+                          <option value={5} className="dark:bg-slate-900">5 条/页</option>
+                          <option value={10} className="dark:bg-slate-900">10 条/页</option>
+                          <option value={20} className="dark:bg-slate-900">20 条/页</option>
+                          <option value={50} className="dark:bg-slate-900">50 条/页</option>
+                        </select>
+                        <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500" />
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
 
         </div>
-
-        <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-6 flex flex-col min-h-[400px]">
-          <h3 className="text-lg font-bold mb-4 select-none">{t('dashboard.logs.title', lang)}</h3>
-          
-          {logs.length === 0 ? (
-            <div className="flex-1 flex flex-col items-center justify-center text-[var(--color-text-muted)] select-none">
-              <p className="text-sm">{t('dashboard.logs.empty', lang)}</p>
-            </div>
-          ) : (
-            <div className="flex-1 flex flex-col gap-3 overflow-y-auto">
-              {logs.map((logItem, idx) => (
-                <div key={idx} className="p-3 bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)] rounded-xl flex flex-col gap-1 shadow-sm font-mono text-[11px]">
-                  <div className="flex justify-between items-center text-[var(--color-text-muted)]">
-                    <span className="font-bold">{logItem.time?.slice(11, 19) || ''}</span>
-                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase ${
-                      logItem.level === 'error' ? 'bg-red-500/10 text-red-500' : (logItem.level === 'warn' ? 'bg-yellow-500/10 text-yellow-500' : 'bg-blue-500/10 text-blue-500')
-                    }`}>{logItem.level}</span>
-                  </div>
-                  <div className="text-[var(--color-text-primary)] leading-normal break-all font-medium">{logItem.message}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
       </div>
     </div>
   );

@@ -86,10 +86,21 @@ function startServer() {
     // Set environment for the server
     process.env.ORCA_BASE_DIR = app.getPath('userData');
 
+    const appPath = app.getAppPath();
+    const isAsar = appPath.includes('app.asar');
+    const skillsSrcDir = isAsar 
+      ? path.join(appPath, '..', 'app.asar.unpacked', 'skills') 
+      : path.join(appPath, 'skills');
+
     // Fork the server process
     const { fork } = require('child_process');
     serverProcess = fork(serverScript, [], {
-      env: { ...process.env, ORCA_BASE_DIR: app.getPath('userData'), LOCAL_AUTH_TOKEN },
+      env: { 
+        ...process.env, 
+        ORCA_BASE_DIR: app.getPath('userData'), 
+        LOCAL_AUTH_TOKEN,
+        ORCA_SKILLS_SRC_DIR: skillsSrcDir
+      },
       silent: true
     });
 

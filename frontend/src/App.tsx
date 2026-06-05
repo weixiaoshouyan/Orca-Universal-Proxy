@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { HashRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { api } from './api';
-import { LayoutDashboard, MessageSquare, MonitorPlay, Box, Settings, Activity, Sun, Moon, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, MonitorPlay, Box, Settings, Activity, Sun, Moon, PanelLeftOpen, PanelLeftClose, GraduationCap } from 'lucide-react';
 import { translate as t, getLanguage } from './i18n';
 import type { Language } from './i18n';
 
@@ -11,6 +11,7 @@ import Apps from './pages/Apps';
 import Providers from './pages/Providers';
 import SettingsPage from './pages/Settings';
 import Logs from './pages/Logs';
+import Skills from './pages/Skills';
 
 function Sidebar({ 
   isDark, 
@@ -30,12 +31,13 @@ function Sidebar({
     { name: t('menu.chat', lang), path: '/chat', icon: MessageSquare },
     { name: t('menu.apps', lang), path: '/apps', icon: MonitorPlay },
     { name: t('menu.providers', lang), path: '/providers', icon: Box },
+    { name: t('menu.skills', lang), path: '/skills', icon: GraduationCap },
     { name: t('menu.settings', lang), path: '/settings', icon: Settings },
     { name: t('menu.logs', lang), path: '/logs', icon: Activity },
   ];
 
   return (
-    <div className={`h-screen bg-[var(--color-bg-sidebar)] border-r border-[var(--color-border-base)] flex flex-col fixed left-0 top-0 transition-all duration-300 z-50 ${
+    <div className={`h-full bg-[var(--color-bg-sidebar)] border-r border-[var(--color-border-base)] flex flex-col transition-all duration-300 shrink-0 ${
       isCollapsed ? 'w-[72px]' : 'w-[240px]'
     }`}>
       {/* Header */}
@@ -133,6 +135,51 @@ function Sidebar({
   );
 }
 
+function AppContent({
+  isDark,
+  toggleTheme,
+  lang,
+  setLang,
+  isCollapsed,
+  toggleCollapse
+}: {
+  isDark: boolean,
+  toggleTheme: () => void,
+  lang: Language,
+  setLang: (lang: Language) => void,
+  isCollapsed: boolean,
+  toggleCollapse: () => void
+}) {
+  const location = useLocation();
+  const isChatRoute = location.pathname.startsWith('/chat');
+
+  return (
+    <div className="flex h-screen w-screen overflow-hidden bg-[var(--color-bg-base)] transition-colors duration-300">
+      <Sidebar 
+        isDark={isDark} 
+        toggleTheme={toggleTheme} 
+        lang={lang} 
+        isCollapsed={isCollapsed}
+        toggleCollapse={toggleCollapse}
+      />
+      <main className={`flex-1 text-[var(--color-text-primary)] h-full min-w-0 transition-all duration-300 ${
+        isChatRoute ? 'p-0 overflow-hidden' : 'px-10 py-8 overflow-y-auto'
+      }`}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/chat" replace />} />
+          <Route path="/dashboard" element={<Dashboard lang={lang} />} />
+          <Route path="/chat" element={<Chat lang={lang} />} />
+          <Route path="/apps" element={<Apps lang={lang} />} />
+          <Route path="/providers" element={<Providers lang={lang} />} />
+          <Route path="/skills" element={<Skills lang={lang} />} />
+          <Route path="/settings" element={<SettingsPage lang={lang} setLang={setLang} />} />
+          <Route path="/logs" element={<Logs lang={lang} />} />
+        </Routes>
+      </main>
+    </div>
+  );
+}
+
 function App() {
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -179,28 +226,14 @@ function App() {
 
   return (
     <HashRouter>
-      <div className="flex min-h-screen bg-[var(--color-bg-base)] transition-colors duration-300">
-        <Sidebar 
-          isDark={isDark} 
-          toggleTheme={() => setIsDark(!isDark)} 
-          lang={lang} 
-          isCollapsed={isCollapsed}
-          toggleCollapse={toggleCollapse}
-        />
-        <main className={`flex-1 px-10 py-8 text-[var(--color-text-primary)] min-h-screen transition-all duration-300 ${
-          isCollapsed ? 'ml-[72px]' : 'ml-[240px]'
-        }`}>
-          <Routes>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
-            <Route path="/dashboard" element={<Dashboard lang={lang} />} />
-            <Route path="/chat" element={<Chat lang={lang} />} />
-            <Route path="/apps" element={<Apps lang={lang} />} />
-            <Route path="/providers" element={<Providers lang={lang} />} />
-            <Route path="/settings" element={<SettingsPage lang={lang} setLang={setLang} />} />
-            <Route path="/logs" element={<Logs lang={lang} />} />
-          </Routes>
-        </main>
-      </div>
+      <AppContent 
+        isDark={isDark}
+        toggleTheme={() => setIsDark(!isDark)}
+        lang={lang}
+        setLang={setLang}
+        isCollapsed={isCollapsed}
+        toggleCollapse={toggleCollapse}
+      />
     </HashRouter>
   );
 }

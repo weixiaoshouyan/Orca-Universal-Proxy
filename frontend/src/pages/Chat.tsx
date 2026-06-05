@@ -48,29 +48,31 @@ export default function Chat({ lang }: { lang: Language }) {
   const [activeId, setActiveId] = useState<string>('');
   const [input, setInput] = useState('');
   const [models, setModels] = useState<{ id: string; name: string; providerName: string }[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'skill' | 'buildPlan'>('none');
-  const abortControllerRef = useRef<AbortController | null>(null);
+  const [loadingChats, setLoadingChats] = useState<Record<string, boolean>>({});
+  const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'readyTools' | 'buildPlan'>('none');
+  const abortControllersRef = useRef<Record<string, AbortController>>({});
 
-  const handleStop = () => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+  const handleStop = (chatId?: string) => {
+    const id = chatId || activeId;
+    const controller = abortControllersRef.current[id];
+    if (controller) {
+      controller.abort();
+      delete abortControllersRef.current[id];
     }
-    setIsLoading(false);
+    setLoadingChats(prev => ({ ...prev, [id]: false }));
   };
 
   useEffect(() => {
     return () => {
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      Object.values(abortControllersRef.current).forEach(controller => controller.abort());
     };
   }, []);
   
   // Agent mode & skills state
   const [useAgent, setUseAgent] = useState(true);
   const activeSkillId = '';
+  const [skills, setSkills] = useState<any[]>([]);
+  const [mcpTools, setMcpTools] = useState<any[]>([]);
 
   // Workspace selector state
   interface Workspace {
@@ -263,6 +265,14 @@ export default function Chat({ lang }: { lang: Language }) {
       } else {
         setActiveWorkspaceId(wsList[0].id);
       }
+
+      api.get('/api/skills').then(skillsRes => {
+        setSkills(skillsRes.data || []);
+      }).catch(err => console.error("Failed to load skills:", err));
+
+      api.get('/api/mcp/tools').then(mcpRes => {
+        setMcpTools(mcpRes.data || []);
+      }).catch(err => console.error("Failed to load MCP tools:", err));
     }).catch(console.error);
   }, []);
 
@@ -485,7 +495,8 @@ export default function Chat({ lang }: { lang: Language }) {
   };
 
   const handleSend = async () => {
-    if ((!input.trim() && !attachedFile) || isLoading || !activeChat) return;
+    const chatId = activeId;
+    if ((!input.trim() && !attachedFile) || loadingChats[chatId] || !activeChat) return;
 
     let userPrompt = input;
     // Embed attached file if exists
@@ -501,7 +512,7 @@ export default function Chat({ lang }: { lang: Language }) {
     // Clear input & attachments
     setInput('');
     setAttachedFile(null);
-    setIsLoading(true);
+    setLoadingChats(prev => ({ ...prev, [chatId]: true }));
 
     // Update conversation state temporarily
     const assistantIndex = newMessages.length;
@@ -509,7 +520,7 @@ export default function Chat({ lang }: { lang: Language }) {
     
     // Update local state and memory
     const tempUpdated = conversations.map(c => {
-      if (c.id === activeId) {
+      if (c.id === chatId) {
         const rawTitle = input.trim().slice(0, 15);
         const isDefaultTitle = c.title === '新会话' || c.title.startsWith('新会话 ') || c.title === 'New Chat' || c.title.startsWith('New Chat ');
         const fileTitle = lang === 'en' ? 'File Chat' : '文件对话';
@@ -533,7 +544,50 @@ export default function Chat({ lang }: { lang: Language }) {
     };
 
     const controller = new AbortController();
-    abortControllerRef.current = controller;
+    abortControllersRef.current[chatId] = controller;
+
+    let accumulatedContent = '';
+    let lastRenderTime = Date.now();
+    let renderTimeout: any = null;
+
+    const flushRender = (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastRenderTime < 80) {
+        if (!renderTimeout) {
+          renderTimeout = setTimeout(() => {
+            renderTimeout = null;
+            flushRender(true);
+          }, 80 - (now - lastRenderTime));
+        }
+        return;
+      }
+
+      if (renderTimeout) {
+        clearTimeout(renderTimeout);
+        renderTimeout = null;
+      }
+
+      lastRenderTime = now;
+      
+      setConversations(prev => {
+        const updated = prev.map(c => {
+          if (c.id === chatId) {
+            const msgs = [...c.messages];
+            if (msgs[assistantIndex]) {
+              msgs[assistantIndex] = {
+                role: 'assistant',
+                content: accumulatedContent,
+                timestamp: msgs[assistantIndex].timestamp || timeStr
+              };
+            }
+            return { ...c, messages: msgs };
+          }
+          return c;
+        });
+        localStorage.setItem('orca_conversations', JSON.stringify(updated));
+        return updated;
+      });
+    };
 
     await fetchEventSource('/v1/chat/completions', body, 
       (data) => {
@@ -541,43 +595,28 @@ export default function Chat({ lang }: { lang: Language }) {
           const parsed = JSON.parse(data);
           const delta = parsed.choices?.[0]?.delta?.content || '';
           if (delta) {
-            setConversations(prev => {
-              const updated = prev.map(c => {
-                if (c.id === activeId) {
-                  const msgs = [...c.messages];
-                  if (msgs[assistantIndex]) {
-                    msgs[assistantIndex] = {
-                      role: 'assistant',
-                      content: msgs[assistantIndex].content + delta,
-                      timestamp: msgs[assistantIndex].timestamp || timeStr
-                    };
-                  }
-                  return { ...c, messages: msgs };
-                }
-                return c;
-              });
-              // Sync to local storage
-              localStorage.setItem('orca_conversations', JSON.stringify(updated));
-              return updated;
-            });
+            accumulatedContent += delta;
+            flushRender();
           }
         } catch(e) {}
       },
       () => {
-        setIsLoading(false);
-        abortControllerRef.current = null;
+        flushRender(true);
+        setLoadingChats(prev => ({ ...prev, [chatId]: false }));
+        delete abortControllersRef.current[chatId];
       },
       (err) => {
+        flushRender(true);
         if (err.name === 'AbortError') {
           console.log('Request aborted by user');
-          setIsLoading(false);
-          abortControllerRef.current = null;
+          setLoadingChats(prev => ({ ...prev, [chatId]: false }));
+          delete abortControllersRef.current[chatId];
           return;
         }
         console.error(err);
         setConversations(prev => {
           const updated = prev.map(c => {
-            if (c.id === activeId) {
+            if (c.id === chatId) {
               const msgs = [...c.messages];
               if (msgs[assistantIndex]) {
                 msgs[assistantIndex] = {
@@ -593,8 +632,8 @@ export default function Chat({ lang }: { lang: Language }) {
           localStorage.setItem('orca_conversations', JSON.stringify(updated));
           return updated;
         });
-        setIsLoading(false);
-        abortControllerRef.current = null;
+        setLoadingChats(prev => ({ ...prev, [chatId]: false }));
+        delete abortControllersRef.current[chatId];
       },
       controller.signal
     );
@@ -659,7 +698,7 @@ export default function Chat({ lang }: { lang: Language }) {
   };
 
   return (
-    <div className="flex h-[calc(100vh-64px)] gap-6 animate-in fade-in duration-500 w-full overflow-hidden">
+    <div className="flex h-full gap-6 animate-in fade-in duration-500 w-full overflow-hidden p-6">
       
       {/* Hidden File Input */}
       <input 
@@ -798,6 +837,7 @@ export default function Chat({ lang }: { lang: Language }) {
         <div className="flex-1 overflow-y-auto space-y-1 pr-1 mt-2">
           {filteredConversations.map(chat => {
             const isActive = chat.id === activeId;
+            const isChatLoading = loadingChats[chat.id];
             return (
               <div 
                 key={chat.id}
@@ -808,7 +848,10 @@ export default function Chat({ lang }: { lang: Language }) {
                     : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
-                <div className="truncate flex-1 pr-2 text-[13px]">{chat.title}</div>
+                <div className="truncate flex-1 pr-2 text-[13px] flex items-center gap-1.5">
+                  {isChatLoading && <Loader className="w-3 h-3 animate-spin text-[#24818d] shrink-0" />}
+                  <span className="truncate">{chat.title}</span>
+                </div>
                 <button 
                   onClick={(e) => handleDeleteChat(chat.id, e)}
                   className="opacity-0 group-hover:opacity-100 hover:text-red-500 text-gray-400 transition-opacity p-0.5"
@@ -858,7 +901,7 @@ export default function Chat({ lang }: { lang: Language }) {
         )}
 
         {/* Dynamic Loading Bar at the top of chat interface */}
-        {isLoading && (
+        {loadingChats[activeId] && (
           <div className="w-full h-1 relative overflow-hidden bg-gray-100 dark:bg-slate-800/50 shrink-0 mb-3 rounded-full">
             <div className="absolute top-0 left-0 h-full w-full bg-gradient-to-r from-blue-500 via-emerald-500 to-indigo-500 animate-loading-bar rounded-full"></div>
           </div>
@@ -879,14 +922,14 @@ export default function Chat({ lang }: { lang: Language }) {
                 {msg.role === 'system' ? (
                   <div className="px-4 py-2 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-full text-xs font-semibold text-[var(--color-text-muted)] flex items-center gap-2 shadow-sm animate-in slide-in-from-top-2 duration-300">
                     <Sparkles className="w-3.5 h-3.5 text-yellow-500" />
-                    {msg.content}
+                    {cleanThinkTags(msg.content)}
                   </div>
                 ) : (
                   <div className={`p-4 rounded-2xl shadow-sm text-[14px] leading-relaxed ${
                     msg.role === 'user' ? 'bg-blue-600 text-white rounded-tr-sm whitespace-pre-wrap' : 'bg-[var(--color-bg-card)] border border-[var(--color-border-base)] text-[var(--color-text-primary)] rounded-tl-sm'
                   }`}>
                     {msg.role === 'user' ? (
-                      msg.content
+                      cleanThinkTags(msg.content)
                     ) : (
                       <div className="space-y-4">
                         {parseAssistantMessage(msg.content).map((block, idx) => {
@@ -1059,23 +1102,23 @@ export default function Chat({ lang }: { lang: Language }) {
               <button 
                 onClick={(e) => { 
                   e.stopPropagation(); 
-                  if (isLoading) {
+                  if (loadingChats[activeId]) {
                     handleStop(); 
                   } else {
                     handleSend(); 
                   }
                 }}
-                disabled={!isLoading && ((!input.trim() && !attachedFile) || !activeChat)}
+                disabled={!loadingChats[activeId] && ((!input.trim() && !attachedFile) || !activeChat)}
                 className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all duration-250 cursor-pointer ${
-                  isLoading 
+                  loadingChats[activeId] 
                     ? 'bg-red-500 text-white shadow-md shadow-red-500/20 animate-pulse' 
                     : (!input.trim() && !attachedFile) || !activeChat
                       ? 'bg-gray-100 dark:bg-slate-800/80 text-gray-400 dark:text-gray-600 cursor-not-allowed'
                       : 'bg-emerald-500 hover:bg-emerald-600 text-white shadow-md shadow-emerald-500/20'
                 }`}
-                title={isLoading ? (lang === 'en' ? 'Stop' : '停止运行') : (lang === 'en' ? 'Send' : '发送')}
+                title={loadingChats[activeId] ? (lang === 'en' ? 'Stop' : '停止运行') : (lang === 'en' ? 'Send' : '发送')}
               >
-                {isLoading ? (
+                {loadingChats[activeId] ? (
                   <Square className="w-4 h-4 fill-white" />
                 ) : (
                   <ArrowUp className="w-5 h-5" />
@@ -1215,6 +1258,80 @@ export default function Chat({ lang }: { lang: Language }) {
                 )}
               </div>
 
+              {/* Dropdown 4: Ready Tools Indicator */}
+              <div className="relative">
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveDropdown(activeDropdown === 'readyTools' ? 'none' : 'readyTools');
+                  }}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors bg-[var(--color-bg-hover)] px-3 py-1.5 rounded-lg shadow-sm cursor-pointer border border-[#a6e3a1]/25 hover:border-[#a6e3a1]/50"
+                >
+                  <span className="w-2 h-2 rounded-full bg-[#a6e3a1] animate-pulse"></span>
+                  <span>{lang === 'en' ? `Tools (${skills.length + mcpTools.length})` : `就绪工具 (${skills.length + mcpTools.length})`}</span>
+                  <ChevronDown className="w-3 h-3 opacity-70" />
+                </button>
+                {activeDropdown === 'readyTools' && (
+                  <div 
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute bottom-full left-0 mb-1.5 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-xl shadow-lg z-30 w-80 py-3 px-4 max-h-[350px] overflow-y-auto"
+                  >
+                    <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--color-border-base)]">
+                      <span className="text-xs font-bold text-[var(--color-text-primary)]">{lang === 'en' ? 'Active Tools & Skills' : '已就绪智能体工具'}</span>
+                      <span className="text-[10px] text-emerald-500 font-mono bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/25">ONLINE</span>
+                    </div>
+
+                    {/* Section 1: Skills */}
+                    <div className="mb-3">
+                      <div className="text-[10.5px] font-bold text-amber-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                        {lang === 'en' ? `Skills (${skills.length})` : `本地技能库 (${skills.length})`}
+                      </div>
+                      {skills.length === 0 ? (
+                        <div className="text-[11px] text-[var(--color-text-muted)] italic pl-2.5">{lang === 'en' ? 'No local skills loaded.' : '暂无加载本地技能'}</div>
+                      ) : (
+                        <div className="flex flex-col gap-1 pl-2">
+                          {skills.slice(0, 15).map((s: any) => (
+                            <div key={s.id} className="group flex flex-col p-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors">
+                              <span className="text-xs font-mono font-bold text-[var(--color-text-primary)]">{s.name}</span>
+                              <span className="text-[10.5px] text-[var(--color-text-muted)] line-clamp-1 group-hover:line-clamp-none transition-all duration-200">{s.description || 'No description'}</span>
+                            </div>
+                          ))}
+                          {skills.length > 15 && (
+                            <div className="text-[10px] text-[var(--color-text-muted)] italic pl-1 pt-1">
+                              {lang === 'en' ? `... and ${skills.length - 15} more skills` : `... 以及另外 ${skills.length - 15} 个技能`}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Section 2: MCP Tools */}
+                    <div>
+                      <div className="text-[10.5px] font-bold text-sky-500 uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-sky-500"></span>
+                        {lang === 'en' ? `MCP Tools (${mcpTools.length})` : `MCP 外部工具 (${mcpTools.length})`}
+                      </div>
+                      {mcpTools.length === 0 ? (
+                        <div className="text-[11px] text-[var(--color-text-muted)] italic pl-2.5">{lang === 'en' ? 'No MCP tools connected.' : '未连接 MCP 外部工具'}</div>
+                      ) : (
+                        <div className="flex flex-col gap-1.5 pl-2 max-h-[150px] overflow-y-auto">
+                          {mcpTools.map((t: any) => (
+                            <div key={`${t.serverName}_${t.name}`} className="group flex flex-col p-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors border-l-2 border-sky-500/30 pl-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-mono font-bold text-[var(--color-text-primary)]">{t.name}</span>
+                                <span className="text-[9px] text-sky-500 font-bold bg-sky-500/10 px-1 py-0.2 rounded border border-sky-500/15">{t.serverName}</span>
+                              </div>
+                              <span className="text-[10.5px] text-[var(--color-text-muted)] line-clamp-1 group-hover:line-clamp-none transition-all duration-200">{t.description || 'No description'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
         </div>
@@ -1303,8 +1420,19 @@ function parseToolsAndText(content: string) {
   return parts;
 }
 
+function cleanThinkTags(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/<think>/gi, '')
+    .replace(/<\/think>/gi, '')
+    .replace(/<thinking>/gi, '')
+    .replace(/<\/thinking>/gi, '')
+    .trim();
+}
+
 function ThinkingBlock({ content, status, lang }: { content: string; status?: 'done' | 'running'; lang: Language }) {
   const [isExpanded, setIsExpanded] = useState(true);
+  const cleanedContent = cleanThinkTags(content);
   
   return (
     <div className="my-3 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-sm bg-gray-50/50 dark:bg-slate-900/30">
@@ -1323,7 +1451,7 @@ function ThinkingBlock({ content, status, lang }: { content: string; status?: 'd
       </div>
       {isExpanded && (
         <div className="p-4 text-xs font-mono whitespace-pre-wrap text-gray-600 dark:text-gray-300 leading-relaxed max-h-[300px] overflow-y-auto bg-white/30 dark:bg-slate-950/20 italic">
-          {content || (lang === 'en' ? 'Thinking...' : '正在思考...')}
+          {cleanedContent || (lang === 'en' ? 'Thinking...' : '正在思考...')}
         </div>
       )}
     </div>
@@ -1536,52 +1664,111 @@ function TaskListWidget({ tasks }: { tasks: TaskItem[] }) {
   );
 }
 
+function renderDiffContent(content: string, isRunning: boolean) {
+  if (!content) {
+    return <span className="text-slate-500 italic">{isRunning ? 'Establishing pipeline with agent daemon...' : 'Output was empty'}</span>;
+  }
+
+  const lines = content.split('\n');
+  const hasDiffIndicators = lines.some(l => l.startsWith('+') || l.startsWith('-') || l.startsWith('@@'));
+  
+  if (!hasDiffIndicators) {
+    return <span className="text-[#a6e3a1] whitespace-pre">{content}</span>;
+  }
+
+  return (
+    <div className="flex flex-col font-mono text-[11px] leading-relaxed">
+      {lines.map((line, idx) => {
+        let className = "text-slate-300";
+        let bgStyle = "";
+        
+        if (line.startsWith('+')) {
+          className = "text-[#a6e3a1] font-semibold";
+          bgStyle = "bg-emerald-500/10 border-l-2 border-emerald-500 pl-1.5";
+        } else if (line.startsWith('-')) {
+          className = "text-[#f38ba8] font-semibold";
+          bgStyle = "bg-red-500/10 border-l-2 border-red-500 pl-1.5";
+        } else if (line.startsWith('@@')) {
+          className = "text-[#89b4fa] font-bold";
+          bgStyle = "bg-[#89b4fa]/5 pl-1.5";
+        } else {
+          className = "text-slate-300 pl-2";
+        }
+        
+        return (
+          <div key={idx} className={`${bgStyle} min-h-[18px] py-0.5 whitespace-pre-wrap select-text`}>
+            <span className={className}>{line}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ToolExecutionBlock({ block, lang }: { block: any; lang: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
-
   const isRunning = block.status === 'running';
 
   return (
-    <div className="my-3 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-sm bg-slate-900 text-slate-100 transition-all duration-300">
-      {/* Header (Acts as Toggle Button) */}
+    <div className="my-4 border border-slate-200/80 dark:border-slate-800/80 rounded-xl overflow-hidden shadow-lg bg-[#181825] text-slate-200 transition-all duration-300">
+      {/* Terminal Header */}
       <div 
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center justify-between px-4 py-2.5 bg-slate-800/90 hover:bg-slate-800 text-slate-300 text-xs font-mono select-none cursor-pointer border-b border-slate-700/50 transition-colors"
+        className="flex items-center justify-between px-4 py-3 bg-[#11111b]/90 hover:bg-[#1e1e2e] text-slate-300 text-xs font-mono select-none cursor-pointer border-b border-[#313244]/50 transition-colors"
       >
-        <div className="flex items-center gap-2">
-          <Terminal className="w-3.5 h-3.5 text-blue-400 animate-pulse" />
-          <span>
-            {lang === 'en' ? 'Agent Tool:' : '智能体工具:'} <strong className="text-white">{block.toolName}</strong>
+        {/* Left: macOS dots & Title */}
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1.5 shrink-0 select-none">
+            <span className="w-3 h-3 rounded-full bg-[#f38ba8] opacity-90"></span>
+            <span className="w-3 h-3 rounded-full bg-[#f9e2af] opacity-90"></span>
+            <span className="w-3 h-3 rounded-full bg-[#a6e3a1] opacity-90"></span>
+          </div>
+          <span className="text-[11px] text-slate-400 font-bold border-l border-slate-700/50 pl-3 flex items-center gap-1.5">
+            <Terminal className="w-3.5 h-3.5 text-[#89b4fa]" />
+            <span>
+              {lang === 'en' ? 'Subprocess Terminal:' : '子进程终端:'} 
+              <span className="text-white ml-1 font-bold">{block.toolName}</span>
+            </span>
           </span>
         </div>
         
+        {/* Right: Status badge & Toggle */}
         <div className="flex items-center gap-3">
-          {/* Status badge */}
           {isRunning ? (
-            <span className="flex items-center gap-1 text-yellow-400 font-semibold animate-pulse">
-              <Loader className="w-3 h-3 animate-spin" /> {lang === 'en' ? 'Running' : '执行中'}
+            <span className="flex items-center gap-1.5 text-[#f9e2af] font-bold bg-[#f9e2af]/10 px-2 py-0.5 rounded-full text-[10.5px] border border-[#f9e2af]/25 animate-pulse">
+              <Loader className="w-3.5 h-3.5 animate-spin" /> 
+              <span>{lang === 'en' ? 'Running' : '执行中'}</span>
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-green-400 font-semibold">
-              <CheckCircle className="w-3 h-3 text-green-400" /> {lang === 'en' ? 'Success' : '完成'}
+            <span className="flex items-center gap-1.5 text-[#a6e3a1] font-bold bg-[#a6e3a1]/10 px-2 py-0.5 rounded-full text-[10.5px] border border-[#a6e3a1]/25">
+              <CheckCircle className="w-3.5 h-3.5 text-[#a6e3a1]" /> 
+              <span>{lang === 'en' ? 'Success' : '已完成'}</span>
             </span>
           )}
           
-          {/* Collapse/Expand Toggle Indicator */}
-          <span className="text-[10px] text-slate-400 font-semibold bg-slate-950 px-2 py-0.5 rounded border border-slate-700/50 flex items-center gap-1 hover:text-white transition-colors">
-            {isExpanded ? (lang === 'en' ? 'Collapse' : '收起') : (lang === 'en' ? 'Expand' : '展开')}
+          <span className="text-[10px] text-slate-400 font-semibold bg-[#11111b] px-2 py-0.5 rounded border border-[#313244] flex items-center gap-1 hover:text-white transition-colors">
+            {isExpanded ? (lang === 'en' ? 'Hide' : '显示') : (lang === 'en' ? 'Show' : '展开')}
             <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
           </span>
         </div>
       </div>
 
-      {/* Terminal Content (Visible only when expanded) */}
+      {/* Terminal Content Panel */}
       {isExpanded && (
-        <div className="p-4 bg-slate-950/90 font-mono text-[12px] leading-relaxed text-emerald-400 overflow-x-auto max-h-72 border-t border-slate-900 animate-in slide-in-from-top-2 duration-200">
-          <div className="text-slate-500 mb-1 select-none">$ {block.toolName} --run</div>
-          <pre className="whitespace-pre">
-            {block.content || (isRunning ? 'Initializing subprocess stdout pipe...' : 'No output returned')}
-          </pre>
+        <div className="p-4 bg-[#11111b]/95 font-mono text-[12px] leading-relaxed text-[#cdd6f4] overflow-x-auto max-h-80 border-t border-[#11111b] animate-in slide-in-from-top-2 duration-200">
+          {/* Shell line */}
+          <div className="flex items-center gap-2 text-slate-500 mb-2 select-none">
+            <span className="text-[#a6e3a1]">orca-agent</span>
+            <span className="text-slate-400">@</span>
+            <span className="text-[#89b4fa]">powershell</span>
+            <span className="text-[#cdd6f4]">$</span>
+            <span className="text-[#89dceb]">{block.toolName} --exec</span>
+          </div>
+          
+          {/* Code output console wrapper */}
+          <div className="overflow-x-auto bg-[#1e1e2e]/50 p-3 rounded-lg border border-[#313244]/40 font-mono select-text">
+            {renderDiffContent(block.content, isRunning)}
+          </div>
         </div>
       )}
     </div>
