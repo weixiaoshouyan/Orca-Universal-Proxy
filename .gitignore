@@ -1,9 +1,14 @@
-node_modules/
+﻿node_modules/
 dist/
+public/assets/
 .env
 data/config.json
-release/*
-!release/*.exe
+data/billing.json
+data/cache.json
+data/logs/
+data/skills/
+release/
+release-build/
 __pycache__/
 *.py[cod]
 .DS_Store

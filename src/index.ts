@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
@@ -143,9 +143,9 @@ app.use((req, _res, next) => {
 // ---- Local Token Authentication ----
 app.use((req, res, next) => {
   if (!process.env.LOCAL_AUTH_TOKEN) return next();
-  if (req.url.startsWith("/api/")) {
-    // Permit OPTIONS requests
+  if (req.url.startsWith("/api/") || req.url.startsWith("/v1/")) {
     if (req.method === "OPTIONS") return next();
+    if (req.url === "/health") return next();
     const token = req.headers["x-local-token"] || req.query.token;
     if (token !== process.env.LOCAL_AUTH_TOKEN) {
       log("warn", `Unauthorized access attempt to ${req.url}`);
@@ -930,7 +930,7 @@ function parseFrontmatter(content: string): { name: string; description: string;
 
 function getSkillsSystemPrompt(): string {
   return `\n[Agent Skills System]
-You have access to a repository of specialized automation skills (e.g., document automation, scraping, media generation) located at 'C:\\Users\\台就\\.agents\\skills'.
+You have access to a repository of specialized automation skills (e.g., document automation, scraping, media generation) located at '${SKILLS_DIR}'.
 To use these skills:
 1. If you need to search for specialized tools/scripts, call \`list_available_skills\` to see the list of skill IDs and descriptions.
 2. Call \`get_skill_details\` with a specific skillId to read its detailed instructions, guidelines, and available scripts.
@@ -1519,6 +1519,13 @@ async function executeAgentCompletions(
     return res.status(500).json({ error: { message: "Agent execution exceeded maximum recursion depth (12)" } });
   }
 
+  let clientDisconnected = false;
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      clientDisconnected = true;
+    }
+  });
+
   // Build the request parameters. If defaultMaxTokens is 0, omit it.
   const tempMaxTokens = body.max_tokens ?? loadConfig().defaultMaxTokens;
   const maxTokensParam = tempMaxTokens > 0 ? { max_tokens: tempMaxTokens } : {};
@@ -1605,8 +1612,8 @@ async function executeAgentCompletions(
     let buffer = "";
 
     while (true) {
-      if (req.destroyed) {
-        log("info", "[Chat] Request destroyed by client. Aborting stream reader loop.");
+      if (clientDisconnected) {
+        log("info", "[Chat] Response connection closed by client. Aborting stream reader loop.");
         break;
       }
       const { done, value } = await reader.read();
@@ -1696,6 +1703,13 @@ async function executeAgentCompletions(
       }
     }
 
+    if (clientDisconnected) {
+      try {
+        await reader.cancel();
+      } catch (e) {}
+      return;
+    }
+
     // Ensure think block is closed if it was opened
     if (hasOpenedThinkBlock && !hasClosedThinkBlock) {
       hasClosedThinkBlock = true;
@@ -1729,8 +1743,8 @@ async function executeAgentCompletions(
       messages.push({ role: "assistant", tool_calls: toolCalls });
 
       for (const tc of toolCalls) {
-        if (req.destroyed) {
-          log("info", "[Chat] Request destroyed by client. Aborting tool execution loop.");
+        if (clientDisconnected) {
+          log("info", "[Chat] Response connection closed by client. Aborting tool execution loop.");
           break;
         }
         writeDelta(`\n\n> 🔧 **Agent Executing Tool:** \`${tc.function.name}\`...\n`);
@@ -1754,8 +1768,8 @@ async function executeAgentCompletions(
         messages.push({ role: "tool", tool_call_id: tc.id, content: output });
       }
 
-      if (req.destroyed) {
-        log("info", "[Chat] Request destroyed by client. Aborting agent execution loop recursion.");
+      if (clientDisconnected) {
+        log("info", "[Chat] Response connection closed by client. Aborting agent execution loop recursion.");
         if (!res.writableEnded) res.end();
         return;
       }
@@ -1765,8 +1779,16 @@ async function executeAgentCompletions(
       res.write("data: [DONE]\n\n");
       res.end();
       // Track billing for estimation based on text chunks length
-      const estPromptTokens = JSON.stringify(messages).length / 4;
-      const estOutputTokens = accumulatedText.length / 4;
+      // Improved token estimation: CJK chars ~2.5 tokens each, ASCII ~0.25 tokens per char
+      const estimateTokens = (text: string) => {
+        let count = 0;
+        for (let i = 0; i < text.length; i++) {
+          count += text.charCodeAt(i) > 0x7F ? 2.5 : 0.25;
+        }
+        return Math.round(count);
+      };
+      const estPromptTokens = estimateTokens(JSON.stringify(messages));
+      const estOutputTokens = estimateTokens(accumulatedText);
       
       const promptTok = finalUsage?.prompt_tokens || estPromptTokens;
       const compTok = finalUsage?.completion_tokens || estOutputTokens;
@@ -1847,7 +1869,8 @@ app.post("/v1/chat/completions", async (req, res) => {
   
   // Persistent Caching Check
   let cacheKey: string | null = null;
-  if (loadConfig().cacheEnabled && !body.tool_choice && !body.tools) {
+  const canUseResponseCache = body.useAgent === false && !body.activeSkillId && !body.workspacePath && !body.tool_choice && !body.tools;
+  if (loadConfig().cacheEnabled && canUseResponseCache) {
     cacheKey = computeCacheKey(body);
     const cached = getCachedResponse(cacheKey);
     if (cached) {
@@ -1896,7 +1919,7 @@ app.post("/v1/chat/completions", async (req, res) => {
   // Inject Workspace and Skills System Prompts if useAgent is true
   if (useAgent) {
     let agentPrompt = `[Agentic Mode (Build)]
-You are running in Build (Agentic) mode. You have access to internal/built-in agent skills under "C:\\Users\\台就\\.agents\\skills". You can list, detail, and execute scripts from these skills using available tools to automate tasks (e.g., editing documents, Excel, PPT files, writing scripts, running tests).
+You are running in Build (Agentic) mode. You have access to internal/built-in agent skills under "${SKILLS_DIR}". You can list, detail, and execute scripts from these skills using available tools to automate tasks (e.g., editing documents, Excel, PPT files, writing scripts, running tests).
 
 [Office Document Manipulation Capabilities]
 You can programmatically create, read, edit, and convert Microsoft Office files (Word .docx, Excel .xlsx, PowerPoint .pptx) and PDFs using Python libraries.
@@ -2095,7 +2118,7 @@ When the user issues a command that requires multiple steps, you must:
       type: "function",
       function: {
         name: "list_available_skills",
-        description: "List all available internal/built-in agent skills under the skills directory (C:\\Users\\台就\\.agents\\skills), including their skill ID, name, and description."
+        description: "List all available internal/built-in agent skills under the skills directory, including their skill ID, name, and description."
       }
     });
 

@@ -1,4 +1,4 @@
-import fs from "fs";
+﻿import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
@@ -41,12 +41,32 @@ function saveCache() {
 }
 
 export function computeCacheKey(body: any): string {
-  // Extract key fields that identify the prompt context
+  // Normalize messages for consistent caching regardless of API format
+  const normalizeMessages = (msgs: any[]): any[] => {
+    if (!msgs) return [];
+    return msgs.map((m: any) => {
+      // Handle Anthropic content blocks (array of {type, text})
+      if (Array.isArray(m.content)) {
+        return {
+          role: m.role,
+          content: m.content
+            .filter((b: any) => b.type === "text" || b.type === "input_text" || b.type === "output_text")
+            .map((b: any) => b.text || "")
+            .join("")
+        };
+      }
+      return { role: m.role, content: m.content || "" };
+    });
+  };
+
   const keyObj = {
     model: body.model,
-    messages: body.messages || [],
+    messages: normalizeMessages(body.messages),
     temperature: body.temperature ?? 0.7,
-    tools: body.tools || [],
+    tools: (body.tools || []).map((t: any) => ({
+      name: t.function?.name || t.name,
+      description: t.function?.description || t.description || ""
+    })),
   };
   const str = JSON.stringify(keyObj);
   return crypto.createHash("sha256").update(str).digest("hex");
@@ -87,12 +107,21 @@ export async function replayStreamResponse(
   // Split full text into small chunks to simulate typing speed
   const words = fullText.split(/(\s+)/);
   let index = 0;
+  let closed = false;
 
   const interval = setInterval(() => {
+    if (closed) {
+      clearInterval(interval);
+      return;
+    }
     if (index >= words.length) {
       clearInterval(interval);
-      res.write("data: [DONE]\n\n");
-      res.end();
+      try {
+        if (!res.writableEnded) {
+          res.write("data: [DONE]\n\n");
+          res.end();
+        }
+      } catch (_) {}
       onDone();
       return;
     }
@@ -112,11 +141,20 @@ export async function replayStreamResponse(
       ],
     };
 
-    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    try {
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      }
+    } catch (_) {
+      closed = true;
+      clearInterval(interval);
+    }
     index++;
-  }, 30); // 30ms per word chunk simulation
+  }, 30);
 
   res.on("close", () => {
+    closed = true;
     clearInterval(interval);
+    onDone();
   });
 }

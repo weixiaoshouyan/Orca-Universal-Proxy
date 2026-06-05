@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom';
 import { api } from './api';
 import { LayoutDashboard, MessageSquare, MonitorPlay, Box, Settings, Activity, Sun, Moon, PanelLeftOpen, PanelLeftClose, GraduationCap } from 'lucide-react';
@@ -180,6 +180,40 @@ function AppContent({
   );
 }
 
+
+// Error Boundary component for catching render errors
+class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: 40, fontFamily: 'sans-serif', color: '#f87171', background: '#0b0d14', minHeight: '100vh' }}>
+          <h2 style={{ fontSize: 20, marginBottom: 12 }}>Application Error</h2>
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: '#94a3b8', background: '#1e1e2e', padding: 16, borderRadius: 8 }}>
+            {this.state.error?.message || 'Unknown error'}
+          </pre>
+          <button
+            onClick={() => { this.setState({ hasError: false, error: null }); window.location.hash = '#/'; window.location.reload(); }}
+            style={{ marginTop: 16, padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   const [isDark, setIsDark] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -225,7 +259,7 @@ function App() {
   }, []);
 
   return (
-    <HashRouter>
+    <ErrorBoundary><HashRouter>
       <AppContent 
         isDark={isDark}
         toggleTheme={() => setIsDark(!isDark)}
@@ -234,7 +268,7 @@ function App() {
         isCollapsed={isCollapsed}
         toggleCollapse={toggleCollapse}
       />
-    </HashRouter>
+    </HashRouter></ErrorBoundary>
   );
 }
 

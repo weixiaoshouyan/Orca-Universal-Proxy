@@ -1,11 +1,12 @@
 ﻿// ============================================================
 // src/anthropic.ts
-// Anthropic Messages API <-> OpenAI Chat Completions 转锟斤拷
-// 锟斤拷锟节达拷锟斤拷 Claude 锟斤拷锟斤拷锟?// ============================================================
+// Anthropic Messages API <-> OpenAI Chat Completions 转换器
+// 用于适配 Claude 桌面端
+// ============================================================
 
 import { randomUUID } from "crypto";
 
-// ---- Anthropic 锟斤拷锟酵讹拷锟斤拷 ----------------------------------------------------
+// ---- Anthropic 类型定义 ----------------------------------------------------
 
 export interface AnthropicRequest {
   model: string;
@@ -43,7 +44,7 @@ interface AnthropicTool {
   input_schema: Record<string, unknown>;
 }
 
-// ---- 转锟斤拷: Anthropic Request -> OpenAI Chat Request ------------------------
+// ---- 转换: Anthropic Request -> OpenAI Chat Request ------------------------
 
 export interface OpenAIChatRequest {
   model: string;
@@ -156,7 +157,7 @@ export function transformAnthropicRequest(body: AnthropicRequest): OpenAIChatReq
   return req;
 }
 
-// ---- 锟斤拷式锟斤拷应转锟斤拷: OpenAI SSE -> Anthropic SSE ----------------------------
+// ---- 流式响应转换: OpenAI SSE -> Anthropic SSE ----------------------------
 
 export interface AnthropicStreamState {
   messageId: string;
@@ -358,6 +359,8 @@ export interface AnthropicToOpenAIState {
   finishReason: string | null;
   inputTokens: number;
   outputTokens: number;
+  toolCalls: Map<number, { id: string; name: string; arguments: string }>;
+  currentBlockIndex: number;
 }
 
 export function createAnthropicToOpenAIState(model: string): AnthropicToOpenAIState {
@@ -370,6 +373,8 @@ export function createAnthropicToOpenAIState(model: string): AnthropicToOpenAISt
     finishReason: null,
     inputTokens: 0,
     outputTokens: 0,
+    toolCalls: new Map(),
+    currentBlockIndex: 0,
   };
 }
 
@@ -402,6 +407,16 @@ export function processAnthropicToOpenAIChunk(
     case 'content_block_start': {
       const cb = (chunk.content_block || {}) as Record<string, unknown>;
       state.contentBlockType = cb.type as string || 'text';
+      state.currentBlockIndex = (chunk.index as number) ?? state.currentBlockIndex;
+      if (cb.type === 'tool_use') {
+        const toolIdx = state.toolCalls.size;
+        const callId = (cb.id as string) || ('toolu_' + randomUUID().replace(/-/g, '').slice(0, 24));
+        state.toolCalls.set(toolIdx, { id: callId, name: (cb.name as string) || '', arguments: '' });
+        out += openaiSse({
+          id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+          choices: [{ index: 0, delta: { tool_calls: [{ index: toolIdx, id: callId, type: 'function', function: { name: cb.name || '', arguments: '' } }] }, finish_reason: null }],
+        });
+      }
       break;
     }
     case 'content_block_delta': {
@@ -412,8 +427,16 @@ export function processAnthropicToOpenAIChunk(
           choices: [{ index: 0, delta: { content: delta.text }, finish_reason: null }],
         });
       } else if (delta.type === 'input_json_delta' && delta.partial_json) {
-        // Tool use input JSON delta - not directly representable in OpenAI chunk format
-        // We could emit as content for debugging, but best to skip
+        // Emit as OpenAI tool_calls delta with partial arguments
+        const toolIdx = state.toolCalls.size - 1;
+        if (toolIdx >= 0 && state.toolCalls.has(toolIdx)) {
+          const tc = state.toolCalls.get(toolIdx)!;
+          tc.arguments += delta.partial_json as string;
+          out += openaiSse({
+            id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
+            choices: [{ index: 0, delta: { tool_calls: [{ index: toolIdx, function: { arguments: delta.partial_json } }] }, finish_reason: null }],
+          });
+        }
       }
       break;
     }
@@ -433,9 +456,10 @@ export function processAnthropicToOpenAIChunk(
     }
     case 'message_stop': {
       // Final event - emit finish chunk
+      const effectiveFinishReason = state.toolCalls.size > 0 ? 'tool_calls' : (state.finishReason || 'stop');
       out += openaiSse({
         id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,
-        choices: [{ index: 0, delta: {}, finish_reason: state.finishReason || 'stop' }],
+        choices: [{ index: 0, delta: {}, finish_reason: effectiveFinishReason }],
       });
       out += openaiSse({
         id: state.chatId, object: 'chat.completion.chunk', created: now, model: state.model,

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+﻿import { useState, useEffect, useRef } from 'react';
 import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy, Brain } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, fetchEventSource } from '../api';
@@ -70,7 +70,7 @@ export default function Chat({ lang }: { lang: Language }) {
   
   // Agent mode & skills state
   const [useAgent, setUseAgent] = useState(true);
-  const activeSkillId = '';
+  const [activeSkillId, setActiveSkillId] = useState('');
   const [skills, setSkills] = useState<any[]>([]);
   const [mcpTools, setMcpTools] = useState<any[]>([]);
 
@@ -1262,8 +1262,18 @@ export default function Chat({ lang }: { lang: Language }) {
                         <div className="text-[11px] text-[var(--color-text-muted)] italic pl-2.5">{lang === 'en' ? 'No local skills loaded.' : '暂无加载本地技能'}</div>
                       ) : (
                         <div className="flex flex-col gap-1 pl-2">
+                          <div
+                            onClick={() => setActiveSkillId('')}
+                            className={`group flex flex-col p-1.5 rounded cursor-pointer transition-colors border ${activeSkillId === '' ? 'border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5' : 'border-transparent hover:bg-[var(--color-bg-hover)]'}`}
+                          >
+                            <span className="text-xs font-semibold text-[var(--color-text-muted)]">{lang === 'en' ? 'No skill (Normal Chat)' : '无技能 (常规对话)'}</span>
+                          </div>
                           {skills.slice(0, 15).map((s: any) => (
-                            <div key={s.id} className="group flex flex-col p-1 rounded hover:bg-[var(--color-bg-hover)] transition-colors">
+                            <div
+                              key={s.id}
+                              onClick={() => setActiveSkillId(s.id)}
+                              className={`group flex flex-col p-1.5 rounded cursor-pointer transition-colors border ${activeSkillId === s.id ? 'border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5' : 'border-transparent hover:bg-[var(--color-bg-hover)]'}`}
+                            >
                               <span className="text-xs font-mono font-bold text-[var(--color-text-primary)]">{s.name}</span>
                               <span className="text-[10.5px] text-[var(--color-text-muted)] line-clamp-1 group-hover:line-clamp-none transition-all duration-200">{s.description || 'No description'}</span>
                             </div>

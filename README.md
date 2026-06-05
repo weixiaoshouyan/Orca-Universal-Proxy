@@ -1,4 +1,4 @@
-# Orca Agentic Universal Proxy (Orca 智能代理网关)
+﻿# Orca Agentic Universal Proxy (Orca 智能代理网关)
 
 Orca Agentic Universal Proxy 是一款专为 AI 开发工具与桌面客户端打造的本地多模型智能代理服务器。除原生的 **Codex CLI**、**Claude 桌面端**、**Cursor/VSCode** 等工具适配外，全新升级为**智能体代理网关 (Agent Mode)**，支持外部 **Skills (本地脚本技能)** 与 **Model Context Protocol (MCP) 服务** 的深度接入。
 

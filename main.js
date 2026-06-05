@@ -1,7 +1,37 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
+﻿const { app, BrowserWindow, Tray, Menu, nativeImage, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+
+function isBrokenPipeError(err) {
+  return err && err.code === 'EPIPE';
+}
+
+// Electron can be launched from a parent shell that exits while the app stays alive.
+// In that case writing logs to stdout/stderr can throw EPIPE and crash the main process.
+process.stdout.on('error', (err) => {
+  if (!isBrokenPipeError(err)) throw err;
+});
+process.stderr.on('error', (err) => {
+  if (!isBrokenPipeError(err)) throw err;
+});
+
+const rawConsoleLog = console.log.bind(console);
+const rawConsoleError = console.error.bind(console);
+console.log = (...args) => {
+  try {
+    rawConsoleLog(...args);
+  } catch (err) {
+    if (!isBrokenPipeError(err)) throw err;
+  }
+};
+console.error = (...args) => {
+  try {
+    rawConsoleError(...args);
+  } catch (err) {
+    if (!isBrokenPipeError(err)) throw err;
+  }
+};
 
 // Generate a local auth token for this session
 const LOCAL_AUTH_TOKEN = crypto.randomBytes(32).toString('hex');
