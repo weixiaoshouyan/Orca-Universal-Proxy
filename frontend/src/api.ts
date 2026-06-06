@@ -51,6 +51,8 @@ export async function fetchEventSource(url: string, body: any, onMessage: (data:
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        // Skip event: lines and comments
+        if (trimmed.startsWith('event:') || trimmed.startsWith(':')) continue;
         if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
           const dataStr = trimmed.substring(6);
           try {

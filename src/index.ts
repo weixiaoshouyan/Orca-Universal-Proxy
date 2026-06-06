@@ -53,7 +53,7 @@ const _STATIC_DIR = _isElectron ? path.join(_devDir, "public") : path.join(_BASE
 const LOG_DIR = path.join(_BASE_DIR, "data", "logs");
 const LOG_FILE = path.join(LOG_DIR, "orca.log");
 const BILLING_FILE = path.join(_BASE_DIR, "data", "billing.json");
-try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch (e) {}
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch (e) { console.error("Failed to create log directory:", e); }
 
 const cfg = loadConfig();
 const PORT = cfg.port;
@@ -82,7 +82,7 @@ function log(level: string, ...args: unknown[]) {
 
   try {
     fs.appendFileSync(LOG_FILE, `[${ts}] [${level.toUpperCase()}] ${message}\n`, "utf-8");
-  } catch (e) {}
+  } catch (e) { console.error("Failed to write to log file:", e); }
 }
 
 interface Stats {
@@ -1128,7 +1128,7 @@ function seedBillingFile() {
       fs.writeFileSync(BILLING_FILE, JSON.stringify({}, null, 2), "utf-8");
       stats.totalTokens = 0;
       stats.totalCost = 0;
-    } catch (e) {}
+    } catch (e) { log("error", "Failed to seed billing file:", e); }
   } else {
     try {
       let data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
@@ -1167,7 +1167,7 @@ function seedBillingFile() {
       }
       stats.totalTokens = total;
       stats.totalCost = totalCost;
-    } catch (e) {}
+    } catch (e) { log("error", "Failed to load billing stats:", e); }
   }
 }
 
@@ -1250,7 +1250,9 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
     }
     try {
       const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+      const realWorkspacePath = fs.realpathSync(workspacePath);
+      const realFullPath = fs.existsSync(fullPath) ? fs.realpathSync(fullPath) : fullPath;
+      if (!realFullPath.startsWith(realWorkspacePath)) {
         return "Error: Path traversal violation. Access denied.";
       }
       if (!fs.existsSync(fullPath)) {
@@ -1277,10 +1279,13 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
     }
     try {
       const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+      const realWorkspacePath = fs.realpathSync(workspacePath);
+      // For write operations, we check the parent directory since the file may not exist yet
+      const parentDir = path.dirname(fullPath);
+      const realParentDir = fs.existsSync(parentDir) ? fs.realpathSync(parentDir) : parentDir;
+      if (!realParentDir.startsWith(realWorkspacePath)) {
         return "Error: Path traversal violation. Access denied.";
       }
-      const parentDir = path.dirname(fullPath);
       if (!fs.existsSync(parentDir)) {
         fs.mkdirSync(parentDir, { recursive: true });
       }
@@ -1297,7 +1302,9 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
     }
     try {
       const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      if (!fullPath.startsWith(path.resolve(workspacePath))) {
+      const realWorkspacePath = fs.realpathSync(workspacePath);
+      const realFullPath = fs.existsSync(fullPath) ? fs.realpathSync(fullPath) : fullPath;
+      if (!realFullPath.startsWith(realWorkspacePath)) {
         return "Error: Path traversal violation. Access denied.";
       }
       if (!fs.existsSync(fullPath)) {
@@ -1378,7 +1385,7 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
               }
             }
           }
-        } catch (e) {}
+        } catch (e) { log("error", "Error searching directory:", e); }
       };
 
       searchDir(workspacePath);
@@ -1422,7 +1429,7 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
               }
             }
           }
-        } catch (e) {}
+        } catch (e) { log("error", "Error walking directory:", e); }
       };
 
       walk(workspacePath);
@@ -1487,15 +1494,17 @@ async function handleAgentToolCall(tc: any, workspacePath: string): Promise<stri
     }
   }
 
-  if (toolName.startsWith("mcp_")) {
-    const parts = toolName.split("_");
-    const serverName = parts[1];
-    const actualToolName = parts.slice(2).join("_");
-    try {
-      const result = await executeMCPTool(serverName, actualToolName, args);
-      return JSON.stringify(result);
-    } catch (e: any) {
-      return `Error executing MCP tool: ${e.message}`;
+  if (toolName.startsWith("mcp__")) {
+    const parts = toolName.split("__");
+    if (parts.length >= 3) {
+      const serverName = parts[1];
+      const actualToolName = parts.slice(2).join("__");
+      try {
+        const result = await executeMCPTool(serverName, actualToolName, args);
+        return JSON.stringify(result);
+      } catch (e: any) {
+        return `Error executing MCP tool: ${e.message}`;
+      }
     }
   }
 
@@ -1515,8 +1524,27 @@ async function executeAgentCompletions(
   cacheKey: string | null,
   depth = 0
 ): Promise<any> {
-  if (depth > 12) {
-    return res.status(500).json({ error: { message: "Agent execution exceeded maximum recursion depth (12)" } });
+  const maxDepth = 40;
+  if (depth > maxDepth) {
+    const errMsg = `Agent execution exceeded maximum recursion depth (${maxDepth})`;
+    log("error", `[Chat] ${errMsg}`);
+    if (res.headersSent) {
+      if (!res.writableEnded) {
+        const errorChunk = {
+          id: "chatcmpl-" + Date.now(),
+          object: "chat.completion.chunk",
+          created: Math.floor(Date.now() / 1000),
+          model: resolved.model,
+          choices: [{ index: 0, delta: { content: `\n\n[Agent Execution Error: ${errMsg}]\n` }, finish_reason: "error" }]
+        };
+        res.write("data: " + JSON.stringify(errorChunk) + "\n\n");
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+      return;
+    } else {
+      return res.status(500).json({ error: { message: errMsg } });
+    }
   }
 
   let clientDisconnected = false;
@@ -1594,6 +1622,16 @@ async function executeAgentCompletions(
   }
 
   if (body.stream) {
+    if (!res.headersSent) {
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
+      if (typeof res.flushHeaders === "function") {
+        res.flushHeaders();
+      }
+    }
+
     // Keep connection alive with periodic pings while fetching upstream
     const fetchKeepAlive = setInterval(() => {
       if (!res.writableEnded) {
@@ -1610,13 +1648,6 @@ async function executeAgentCompletions(
     if (!upstreamResp.ok) {
       const errText = await upstreamResp.text();
       throw new Error(`Upstream returned ${upstreamResp.status}: ${errText}`);
-    }
-
-    if (!res.headersSent) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.setHeader("X-Accel-Buffering", "no");
     }
 
     let accumulatedToolCalls: any[] = [];
@@ -1715,7 +1746,7 @@ async function executeAgentCompletions(
                 res.write(line + "\n\n");
               }
             }
-          } catch (e) {}
+          } catch (e) { log("warn", "Failed to parse SSE chunk:", e); }
         }
       }
     }
@@ -1723,7 +1754,7 @@ async function executeAgentCompletions(
     if (clientDisconnected) {
       try {
         await reader.cancel();
-      } catch (e) {}
+      } catch (e) { log("warn", "Failed to cancel stream reader:", e); }
       return;
     }
 
@@ -2237,7 +2268,7 @@ You have a massive 1,000,000 (1M) token context window memory. You can read, pro
         tools.push({
           type: "function",
           function: {
-            name: `mcp_${tool.serverName}_${tool.name}`,
+            name: `mcp__${tool.serverName}__${tool.name}`,
             description: tool.description,
             parameters: tool.inputSchema
           }
@@ -2278,7 +2309,11 @@ You have a massive 1,000,000 (1M) token context window memory. You can read, pro
     } catch (err) {
       log("warn", `[Route] Provider ${provId} failed:`, err);
       lastError = err;
-      // Continue to next provider in fallback array
+      // If headers were already sent to the client, we cannot redirect or retry another provider
+      if (res.headersSent) {
+        log("info", `[Route] Headers already sent. Aborting route fallback logic.`);
+        break;
+      }
     }
   }
 
@@ -2450,7 +2485,7 @@ app.all("/v1/*", async (req, res) => {
 
 // ---- Start server ----
 
-app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, () => {
   seedBillingFile();
   initSkillsDirectory();
   const active = getActiveProvider();
@@ -2477,6 +2512,12 @@ app.listen(PORT, HOST, () => {
   }
 });
 
+// Configure server timeouts to prevent connection termination during long agent runs
+server.timeout = 0;
+server.keepAliveTimeout = 0;
+server.headersTimeout = 0;
+server.requestTimeout = 0;
+
 // ---- App Management API ----
 
 interface AppInfo {
@@ -2497,7 +2538,7 @@ function findExe(basePaths: string[], patterns: string[]) {
       try {
         const p = bp + "\\" + pat;
         if (fs.existsSync(p)) return p;
-      } catch(e) {}
+      } catch(e) { log("debug", `findExe: Error checking path ${bp}\\${pat}:`, e); }
     }
   }
   return "";
@@ -2516,14 +2557,14 @@ function findInFolder(baseDir: string, exeName: string, maxDepth: number = 2): s
         if (found) return found;
       }
     }
-  } catch(e) {}
+  } catch(e) { log("debug", `findInFolder: Error scanning ${baseDir}:`, e); }
   return "";
 }
 
 function scanApps() {
   const apps: AppInfo[] = [];
   let procs = "";
-  try { procs = execSync("tasklist /FO CSV /NH 2>nul", { encoding: "utf-8" }); } catch(e) {}
+  try { procs = execSync("tasklist /FO CSV /NH 2>nul", { encoding: "utf-8" }); } catch(e) { log("debug", "Failed to get process list:", e); }
   const localApp = process.env.LOCALAPPDATA || "";
   const appData = process.env.APPDATA || "";
   const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
@@ -2532,7 +2573,7 @@ function scanApps() {
   // Codex CLI - check PATH and auto-updated binary directory
   let codexCli = false; let codexPath = "";
   const codexBinPath = localApp + "\\OpenAI\\Codex\\bin\\codex.exe";
-  try { codexPath = execSync("where codex 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; codexCli = true; } catch(e) {}
+  try { codexPath = execSync("where codex 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; codexCli = true; } catch(e) { log("debug", "Codex CLI not found in PATH"); }
   if (!codexCli && fs.existsSync(codexBinPath)) { codexCli = true; codexPath = codexBinPath; }
   apps.push({ id: "codex-cli", name: "Codex CLI", icon: "terminal", installed: codexCli, path: codexPath, running: procs.toLowerCase().includes("codex"), description: "OpenAI Codex command-line interface", type: "cli" });
 
@@ -2548,7 +2589,7 @@ function scanApps() {
         if (fs.existsSync(candidate)) codexDesktopPath = candidate;
       }
     }
-  } catch(e) {}
+  } catch(e) { log("debug", "Failed to scan WindowsApps for Codex:", e); }
   // Fallback: check AppExecutionAliases
   if (!codexDesktopPath) {
     try {
@@ -2556,7 +2597,7 @@ function scanApps() {
       const lines = r.trim().split("\n");
       const waLine = lines.find((l: string) => l.includes("WindowsApps"));
       if (waLine) { codexDesktopPath = waLine.trim(); }
-    } catch(e) {}
+    } catch(e) { log("debug", "Codex not found in AppExecutionAliases"); }
   }
   // Fallback: local install paths
   if (!codexDesktopPath) {
@@ -2573,7 +2614,7 @@ function scanApps() {
 
   // Claude CLI
   let claudeCli = false; let claudePath = "";
-  try { claudePath = execSync("where claude 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; claudeCli = true; } catch(e) {}
+  try { claudePath = execSync("where claude 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; claudeCli = true; } catch(e) { log("debug", "Claude CLI not found in PATH"); }
   apps.push({ id: "claude-cli", name: "Claude CLI", icon: "terminal", installed: claudeCli, path: claudePath, running: procs.toLowerCase().includes("claude"), description: "Anthropic Claude command-line interface", type: "cli" });
 
   // Claude Desktop - scan MSIX packages in WindowsApps
@@ -2587,7 +2628,7 @@ function scanApps() {
         if (fs.existsSync(candidate)) claudeDesktopPath = candidate;
       }
     }
-  } catch(e) {}
+  } catch(e) { log("debug", "Failed to scan WindowsApps for Claude:", e); }
   // Fallback: check AppExecutionAliases
   if (!claudeDesktopPath) {
     try {
@@ -2595,7 +2636,7 @@ function scanApps() {
       const lines = r.trim().split("\n");
       const waLine = lines.find((l: string) => l.includes("WindowsApps"));
       if (waLine) { claudeDesktopPath = waLine.trim(); }
-    } catch(e) {}
+    } catch(e) { log("debug", "Claude not found in AppExecutionAliases"); }
   }
   // Fallback: local install paths
   if (!claudeDesktopPath) {
@@ -2612,12 +2653,12 @@ function scanApps() {
 
   // OpenClaw
   let openclaw = false; let openclawPath = "";
-  try { openclawPath = execSync("where openclaw 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; openclaw = true; } catch(e) {}
+  try { openclawPath = execSync("where openclaw 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; openclaw = true; } catch(e) { log("debug", "OpenClaw not found in PATH"); }
   apps.push({ id: "openclaw", name: "OpenClaw", icon: "terminal", installed: openclaw, path: openclawPath, running: procs.toLowerCase().includes("openclaw"), description: "OpenClaw AI coding agent", type: "cli" });
 
   // OpenCode
   let opencode = false; let opencodePath = "";
-  try { opencodePath = execSync("where opencode 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; opencode = true; } catch(e) {}
+  try { opencodePath = execSync("where opencode 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; opencode = true; } catch(e) { log("debug", "OpenCode not found in PATH"); }
   const opencodeDesktopPath = findExe([
     localApp + "\\ai.opencode.desktop", 
     localApp + "\\Programs\\opencode",
@@ -2653,7 +2694,7 @@ function scanApps() {
   try { 
     vscodePath = execSync("where code 2>nul", { encoding: "utf-8" }).trim().split("\n")[0]; 
     if (vscodePath && fs.existsSync(vscodePath)) vscode = true; 
-  } catch(e) {}
+  } catch(e) { log("debug", "VS Code not found in PATH"); }
   if (!vscode) {
     vscodePath = findExe([
       localApp + "\\Programs\\Microsoft VS Code",
@@ -2834,7 +2875,7 @@ app.post("/api/apps/:id/launch", (req, res) => {
             ? path.join(os.homedir(), "Library", "Application Support", "Claude", "claude_desktop_config.json")
             : path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Claude", "claude_desktop_config.json");
           let claudeConfig: any = {};
-          try { claudeConfig = JSON.parse(fs.readFileSync(claudeConfigPath, "utf-8")); } catch {}
+          try { claudeConfig = JSON.parse(fs.readFileSync(claudeConfigPath, "utf-8")); } catch { log("debug", "Claude Desktop config not found, creating new one"); }
           claudeConfig.proxy = { url: proxyUrl };
           fs.mkdirSync(path.dirname(claudeConfigPath), { recursive: true });
           fs.writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2), "utf-8");
@@ -2869,7 +2910,7 @@ app.post("/api/apps/:id/launch", (req, res) => {
           const configPath = app.path;
           let config: any = {};
           if (fs.existsSync(configPath)) {
-            try { config = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch {}
+            try { config = JSON.parse(fs.readFileSync(configPath, "utf-8")); } catch { log("debug", `Failed to parse ${app.name} config, using defaults`); }
           }
           config.apiProvider = "openai";
           config.openAiBaseUrl = proxyUrl + "/v1";

@@ -134,6 +134,8 @@ function startServer() {
       silent: true
     });
 
+    let resolved = false;
+
     serverProcess.on('message', (msg) => {
       console.log('[Main] IPC Message from server:', msg);
       if (msg && msg.type === 'theme' && mainWindow) {
@@ -223,7 +225,8 @@ function startServer() {
     serverProcess.stdout.on('data', (data) => {
       const msg = data.toString();
       console.log('[Server]', msg);
-      if (msg.includes('Listening on')) {
+      if (msg.includes('Listening on') && !resolved) {
+        resolved = true;
         resolve();
       }
     });
@@ -234,7 +237,10 @@ function startServer() {
 
     serverProcess.on('error', (err) => {
       console.error('Server process error:', err);
-      reject(err);
+      if (!resolved) {
+        resolved = true;
+        reject(err);
+      }
     });
 
     serverProcess.on('exit', (code) => {
@@ -246,8 +252,14 @@ function startServer() {
       }
     });
 
-    // Timeout fallback
-    setTimeout(resolve, 3000);
+    // Timeout fallback - increase to 10 seconds
+    setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        console.log('[Main] Server startup timeout, proceeding anyway...');
+        resolve();
+      }
+    }, 10000);
   });
 }
 

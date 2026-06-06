@@ -63,6 +63,8 @@ export function computeCacheKey(body: any): string {
     model: body.model,
     messages: normalizeMessages(body.messages),
     temperature: body.temperature ?? 0.7,
+    max_tokens: body.max_tokens ?? 0,
+    top_p: body.top_p ?? 1.0,
     tools: (body.tools || []).map((t: any) => ({
       name: t.function?.name || t.name,
       description: t.function?.description || t.description || ""
@@ -116,12 +118,12 @@ export async function replayStreamResponse(
     }
     if (index >= words.length) {
       clearInterval(interval);
-      try {
-        if (!res.writableEnded) {
-          res.write("data: [DONE]\n\n");
-          res.end();
-        }
-      } catch (_) {}
+    try {
+      if (!res.writableEnded) {
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
+    } catch (e) { console.error("Failed to write final SSE event:", e); }
       onDone();
       return;
     }
