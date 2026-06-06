@@ -14,7 +14,6 @@
                   "appId":  "com.orca.proxy",
                   "productName":  "Orca Proxy",
                   "forceCodeSigning":  false,
-                  "asarUnpack":  "skills/**/*",
                   "directories":  {
                                       "output":  "release"
                                   },
@@ -27,6 +26,7 @@
                                 "package.json"
                             ],
                   "win":  {
+                              "signAndEditExecutable": false,
                               "target":  [
                                              {
                                                  "target":  "nsis",
