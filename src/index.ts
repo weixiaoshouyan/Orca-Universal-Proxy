@@ -1527,7 +1527,24 @@ async function executeAgentCompletions(
   });
 
   // Build the request parameters. If defaultMaxTokens is 0, omit it.
-  const tempMaxTokens = body.max_tokens ?? loadConfig().defaultMaxTokens;
+  let tempMaxTokens = body.max_tokens ?? loadConfig().defaultMaxTokens;
+  if (tempMaxTokens > 0) {
+    const isDeepSeekOrAnthropic =
+      resolved.provider?.id === "anthropic" ||
+      resolved.provider?.id === "deepseek" ||
+      String(resolved.model || "").toLowerCase().includes("deepseek") ||
+      String(resolved.model || "").toLowerCase().includes("claude");
+
+    if (isDeepSeekOrAnthropic) {
+      if (tempMaxTokens > 8192) {
+        tempMaxTokens = 8192;
+      }
+    } else {
+      if (tempMaxTokens > 16384) {
+        tempMaxTokens = 16384;
+      }
+    }
+  }
   const maxTokensParam = tempMaxTokens > 0 ? { max_tokens: tempMaxTokens } : {};
 
   const requestBody = {
@@ -1742,6 +1759,7 @@ async function executeAgentCompletions(
 
       messages.push({ role: "assistant", tool_calls: toolCalls });
 
+      let tcIdx = 0;
       for (const tc of toolCalls) {
         if (clientDisconnected) {
           log("info", "[Chat] Response connection closed by client. Aborting tool execution loop.");
@@ -1765,7 +1783,14 @@ async function executeAgentCompletions(
         }
 
         writeDelta(`\n\`\`\`\n${output}\n\`\`\`\n`);
-        messages.push({ role: "tool", tool_call_id: tc.id, content: output });
+        
+        let toolContent = output;
+        const isLastTool = tcIdx === toolCalls.length - 1;
+        if (isLastTool) {
+          toolContent += `\n\n[System Reminder: Please output the updated Task Plan (e.g. - [x] completed, - [/] in-progress, - [ ] pending) at the beginning of your next response, then continue executing the steps or summarize the results.]`;
+        }
+        messages.push({ role: "tool", tool_call_id: tc.id, content: toolContent });
+        tcIdx++;
       }
 
       if (clientDisconnected) {
@@ -1831,10 +1856,18 @@ async function executeAgentCompletions(
     }
     if (choice?.message?.tool_calls && choice.message.tool_calls.length > 0) {
       messages.push(choice.message);
-      for (const tc of choice.message.tool_calls) {
+      const toolCalls = choice.message.tool_calls;
+      for (let i = 0; i < toolCalls.length; i++) {
+        const tc = toolCalls[i];
         const workspacePath = body.workspacePath || "";
         const output = await handleAgentToolCall(tc, workspacePath);
-        messages.push({ role: "tool", tool_call_id: tc.id, content: output });
+        
+        let toolContent = output;
+        const isLastTool = i === toolCalls.length - 1;
+        if (isLastTool) {
+          toolContent += `\n\n[System Reminder: Please output the updated Task Plan (e.g. - [x] completed, - [/] in-progress, - [ ] pending) at the beginning of your next response, then continue executing the steps or summarize the results.]`;
+        }
+        messages.push({ role: "tool", tool_call_id: tc.id, content: toolContent });
       }
       return executeAgentCompletions(req, res, body, resolved, messages, tools, useAgent, activeSkillId, startTime, cacheKey, depth + 1);
     } else {
@@ -1943,13 +1976,25 @@ You can run any terminal command or script directly using the \`run_terminal_com
 You have a massive 1,000,000 (1M) token context window memory. You can read, process, and retain large files, extensive project logs, and multiple workspace documents simultaneously without losing context.
 
 [Task Planning & Sequential Execution]
-When the user issues a command that requires multiple steps, you must:
-1. First, create a "Task Plan" at the very beginning of your response using standard task markdown list format:
+CRITICAL: When the user issues a command or task, you MUST first parse and break down the request into a step-by-step "Task Plan" (Checklist) at the very beginning of your response.
+The Task Plan must be formatted exactly as standard task markdown list:
    - [ ] Task Description (for pending tasks)
    - [/] Task Description (for the active task currently executing)
    - [x] Task Description (for completed tasks)
-2. Execute each task sequentially by calling the appropriate tools.
-3. Update the task status (e.g. change [ ] to [/] and then to [x]) in your follow-up text responses after tool executions, and continue this loop until all tasks are finished.
+You MUST output this Task Plan in your text response before calling any tools, or at the start of any response that calls tools, so that the UI can parse and render the checklist correctly.
+In every subsequent turn, you MUST update the status of each task (e.g. marking completed tasks as [x], the current task as [/], and pending ones as [ ]) and output the updated Task Plan at the beginning of your text response.
+Execute each task step-by-step. Do not skip printing the task list at any turn.
+
+重要提示 (任务规划与分步执行)：
+当用户发出指令或任务时：
+1. 你必须在回复的【最开始】将任务解析并拆解为分步执行的“任务清单”(Task Plan)。
+2. 任务清单必须使用以下标准的 Markdown 任务列表格式：
+   - [ ] 任务描述 (表示待处理任务)
+   - [/] 任务描述 (表示当前正在执行的任务)
+   - [x] 任务描述 (表示已完成的任务)
+3. 在进行任何工具调用之前，你必须在文本回复中先输出这个任务清单，以便前端 UI 正确渲染分步执行面板。
+4. 在后续的每一次迭代回复中，你必须在回复的最开始输出更新后的任务清单（例如，将已完成的标记为 [x]，正在执行的标记为 [/]，待执行的标记为 [ ]），绝对不能省略。
+5. 按照清单步骤，一步一步执行，直至所有任务完成。
 ` + getSkillsSystemPrompt();
     } else {
       // Plan Mode (useAgent === false)
