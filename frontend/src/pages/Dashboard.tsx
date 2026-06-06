@@ -198,7 +198,7 @@ export default function Dashboard({ lang }: DashboardProps) {
   const allModelsSet = new Set<string>();
   Object.values(billingData).forEach((dayData: any) => {
     Object.keys(dayData).forEach(model => {
-      if (activeModelIds.has(model)) {
+      if (activeModelIds.size === 0 || activeModelIds.has(model)) {
         allModelsSet.add(model);
       }
     });
@@ -223,6 +223,20 @@ export default function Dashboard({ lang }: DashboardProps) {
     return colors[index % colors.length];
   };
 
+  // Mount-only cleanup effect to dispose chart instances on unmount
+  useEffect(() => {
+    return () => {
+      if (chartRef.current) {
+        const instance = echarts.getInstanceByDom(chartRef.current);
+        instance?.dispose();
+      }
+      if (horizontalChartRef.current) {
+        const instance = echarts.getInstanceByDom(horizontalChartRef.current);
+        instance?.dispose();
+      }
+    };
+  }, []);
+
   useEffect(() => {
     const isDark = document.documentElement.classList.contains('dark');
     const textColor = isDark ? '#94a3b8' : '#475569';
@@ -230,204 +244,210 @@ export default function Dashboard({ lang }: DashboardProps) {
     let myChart: echarts.ECharts | undefined;
     let handleResize: (() => void) | undefined;
 
-    if (viewType === 'chart' && chartRef.current) {
+    if (chartRef.current) {
       try {
-        const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-        const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
-        
         myChart = echarts.getInstanceByDom(chartRef.current);
         if (!myChart) {
           myChart = echarts.init(chartRef.current);
         }
 
-        // Build series data
-        const lineSeriesList = modelsList.map((model, idx) => {
-          const data = days.map(day => {
-            if (timeUnit === 'year') {
-              let sum = 0;
-              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
-                if (dateStr.startsWith(day)) {
-                  sum += getTokenValue(dayData[model]);
-                }
-              });
-              return sum;
-            } else {
-              return getTokenValue(billingData[day]?.[model]);
-            }
+        if (viewType === 'chart') {
+          const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
+          const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+          
+          // Build series data
+          const lineSeriesList = modelsList.map((model, idx) => {
+            const data = days.map(day => {
+              if (timeUnit === 'year') {
+                let sum = 0;
+                Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                  if (dateStr.startsWith(day)) {
+                    sum += getTokenValue(dayData[model]);
+                  }
+                });
+                return sum;
+              } else {
+                return getTokenValue(billingData[day]?.[model]);
+              }
+            });
+
+            const color = getModelColor(model, idx);
+            return {
+              name: model,
+              type: 'line' as const,
+              smooth: true,
+              symbol: 'circle',
+              symbolSize: 6,
+              showSymbol: true,
+              itemStyle: {
+                color: color,
+                borderColor: '#ffffff',
+                borderWidth: 1.5
+              },
+              lineStyle: {
+                width: 2.5,
+                color: color
+              },
+              data
+            };
           });
 
-          const color = getModelColor(model, idx);
-          return {
-            name: model,
+          const lineData = days.map(day => {
+            let sum = 0;
+            modelsList.forEach(model => {
+              if (timeUnit === 'year') {
+                Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                  if (dateStr.startsWith(day)) {
+                    sum += getTokenValue(dayData[model]);
+                  }
+                });
+              } else {
+                sum += getTokenValue(billingData[day]?.[model]);
+              }
+            });
+            return sum;
+          });
+
+          const lineSeries = {
+            name: 'Token 总消耗',
             type: 'line' as const,
             smooth: true,
             symbol: 'circle',
-            symbolSize: 6,
+            symbolSize: 8,
             showSymbol: true,
             itemStyle: {
-              color: color,
+              color: '#3b82f6',
               borderColor: '#ffffff',
-              borderWidth: 1.5
+              borderWidth: 2
             },
             lineStyle: {
-              width: 2.5,
-              color: color
+              width: 3,
+              color: '#3b82f6',
+              shadowColor: 'rgba(59, 130, 246, 0.3)',
+              shadowBlur: 8,
+              shadowOffsetY: 4
             },
-            data
+            areaStyle: {
+              color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
+                { offset: 1, color: 'rgba(59, 130, 246, 0)' }
+              ])
+            },
+            data: lineData
           };
-        });
 
-        const lineData = days.map(day => {
-          let sum = 0;
-          modelsList.forEach(model => {
-            if (timeUnit === 'year') {
-              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
-                if (dateStr.startsWith(day)) {
-                  sum += getTokenValue(dayData[model]);
+          const series = displayMode === 'total' ? [...lineSeriesList, lineSeries] : lineSeriesList;
+
+          const option: echarts.EChartsOption = {
+            backgroundColor: 'transparent',
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: {
+                type: 'shadow'
+              },
+              backgroundColor: isDark ? '#151824' : '#ffffff',
+              borderColor: isDark ? '#1f2333' : '#e2e8f0',
+              borderWidth: 1,
+              textStyle: {
+                color: isDark ? '#f8fafc' : '#0f172a',
+                fontFamily: 'system-ui',
+                fontSize: 12
+              },
+              formatter: (params: any) => {
+                let date = params[0].axisValue;
+                let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
+                
+                const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
+                const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
+                
+                const sortedParams = [];
+                if (lineItem && displayMode === 'total') {
+                  sortedParams.push(lineItem);
                 }
-              });
-            } else {
-              sum += getTokenValue(billingData[day]?.[model]);
-            }
-          });
-          return sum;
-        });
-
-        const lineSeries = {
-          name: 'Token 总消耗',
-          type: 'line' as const,
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 8,
-          showSymbol: true,
-          itemStyle: {
-            color: '#3b82f6',
-            borderColor: '#ffffff',
-            borderWidth: 2
-          },
-          lineStyle: {
-            width: 3,
-            color: '#3b82f6',
-            shadowColor: 'rgba(59, 130, 246, 0.3)',
-            shadowBlur: 8,
-            shadowOffsetY: 4
-          },
-          areaStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
-              { offset: 1, color: 'rgba(59, 130, 246, 0)' }
-            ])
-          },
-          data: lineData
-        };
-
-        const series = displayMode === 'total' ? [...lineSeriesList, lineSeries] : lineSeriesList;
-
-        const option: echarts.EChartsOption = {
-          backgroundColor: 'transparent',
-          tooltip: {
-            trigger: 'axis',
-            axisPointer: {
-              type: 'shadow'
-            },
-            backgroundColor: isDark ? '#151824' : '#ffffff',
-            borderColor: isDark ? '#1f2333' : '#e2e8f0',
-            borderWidth: 1,
-            textStyle: {
-              color: isDark ? '#f8fafc' : '#0f172a',
-              fontFamily: 'system-ui',
-              fontSize: 12
-            },
-            formatter: (params: any) => {
-              let date = params[0].axisValue;
-              let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
-              
-              const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
-              const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
-              
-              const sortedParams = [];
-              if (lineItem && displayMode === 'total') {
-                sortedParams.push(lineItem);
-              }
-              sortedParams.push(...barItems);
-              
-              sortedParams.forEach((item: any) => {
-                const val = item.value || 0;
-                const color = item.color;
-                tooltipHtml += `
-                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
-                    <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
-                      <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
-                      ${item.seriesName}
-                    </span>
-                    <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
-                  </div>
-                `;
-              });
-              
-              return tooltipHtml;
-            }
-          },
-          legend: {
-            show: false,
-            top: '2%',
-            left: 'center',
-            textStyle: {
-              color: textColor,
-              fontSize: 11,
-              fontFamily: 'system-ui'
-            },
-            itemGap: 16
-          },
-          grid: {
-            top: '15%',
-            left: '2%',
-            right: '2%',
-            bottom: '8%',
-            containLabel: true
-          },
-          xAxis: {
-            type: 'category',
-            data: days,
-            axisLine: {
-              lineStyle: {
-                color: gridBorderColor
+                sortedParams.push(...barItems);
+                
+                sortedParams.forEach((item: any) => {
+                  const val = item.value || 0;
+                  const color = item.color;
+                  tooltipHtml += `
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
+                      <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
+                        ${item.seriesName}
+                      </span>
+                      <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
+                    </div>
+                  `;
+                });
+                
+                return tooltipHtml;
               }
             },
-            axisLabel: {
-              color: textColor,
-              fontSize: 10,
-              fontFamily: 'monospace',
-              interval: timeUnit === 'year' ? 0 : 2
+            legend: {
+              show: false,
+              top: '2%',
+              left: 'center',
+              textStyle: {
+                color: textColor,
+                fontSize: 11,
+                fontFamily: 'system-ui'
+              },
+              itemGap: 16
             },
-            axisTick: {
-              show: false
-            }
-          },
-          yAxis: {
-            type: 'value',
-            splitLine: {
-              lineStyle: {
-                color: splitLineColor,
-                type: 'dashed'
+            grid: {
+              top: '15%',
+              left: '2%',
+              right: '2%',
+              bottom: '8%',
+              containLabel: true
+            },
+            xAxis: {
+              type: 'category',
+              data: days,
+              axisLine: {
+                lineStyle: {
+                  color: gridBorderColor
+                }
+              },
+              axisLabel: {
+                color: textColor,
+                fontSize: 10,
+                fontFamily: 'monospace',
+                interval: timeUnit === 'year' ? 0 : 2
+              },
+              axisTick: {
+                show: false
               }
             },
-            axisLabel: {
-              color: textColor,
-              fontSize: 10,
-              fontFamily: 'monospace',
-              formatter: (value: number) => {
-                if (value === 0) return '0';
-                return (value / 1000) + 'k';
+            yAxis: {
+              type: 'value',
+              splitLine: {
+                lineStyle: {
+                  color: splitLineColor,
+                  type: 'dashed'
+                }
+              },
+              axisLabel: {
+                color: textColor,
+                fontSize: 10,
+                fontFamily: 'monospace',
+                formatter: (value: number) => {
+                  if (value === 0) return '0';
+                  return (value / 1000) + 'k';
+                }
               }
-            }
-          },
-          series
-        };
+            },
+            series
+          };
 
-        myChart.setOption(option);
-        handleResize = () => myChart?.resize();
-        window.addEventListener('resize', handleResize);
+          myChart.setOption(option, true);
+          handleResize = () => myChart?.resize();
+          window.addEventListener('resize', handleResize);
+          
+          setTimeout(() => {
+            myChart?.resize();
+          }, 50);
+        }
       } catch (e) {
         console.error("Failed to render vertical chart:", e);
       }
@@ -436,13 +456,6 @@ export default function Dashboard({ lang }: DashboardProps) {
     return () => {
       if (handleResize) {
         window.removeEventListener('resize', handleResize);
-      }
-      if (myChart) {
-        try {
-          myChart.dispose();
-        } catch (e) {
-          console.error("Failed to dispose vertical chart:", e);
-        }
       }
     };
   }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
@@ -455,133 +468,137 @@ export default function Dashboard({ lang }: DashboardProps) {
     let myChart: echarts.ECharts | undefined;
     let handleResize: (() => void) | undefined;
 
-    if (viewType === 'list' && horizontalChartRef.current) {
+    if (horizontalChartRef.current) {
       try {
-        const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-        const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+        myChart = echarts.getInstanceByDom(horizontalChartRef.current);
+        if (!myChart) {
+          myChart = echarts.init(horizontalChartRef.current);
+        }
 
-        // Calculate cumulative totals per model for selected range
-        const modelTotals: Record<string, number> = {};
-        modelsList.forEach(model => {
-          modelTotals[model] = 0;
-        });
+        if (viewType === 'list') {
+          const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
+          const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
 
-        days.forEach(day => {
+          // Calculate cumulative totals per model for selected range
+          const modelTotals: Record<string, number> = {};
           modelsList.forEach(model => {
-            if (timeUnit === 'year') {
-              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
-                if (dateStr.startsWith(day)) {
-                  modelTotals[model] += getTokenValue(dayData[model]);
-                }
-              });
-            } else {
-              modelTotals[model] += getTokenValue(billingData[day]?.[model]);
-            }
+            modelTotals[model] = 0;
           });
-        });
 
-        // Map and sort models by total tokens descending.
-        // In ECharts, y-axis category data is rendered from bottom to top,
-        // so to show descending from top to bottom, we sort ascending in the array.
-        const sortedModels = modelsList
-          .map((model, idx) => ({
-            model,
-            total: modelTotals[model],
-            color: getModelColor(model, idx)
-          }))
-          .filter(item => item.total > 0)
-          .sort((a, b) => a.total - b.total);
-
-        if (sortedModels.length > 0) {
-          myChart = echarts.getInstanceByDom(horizontalChartRef.current);
-          if (!myChart) {
-            myChart = echarts.init(horizontalChartRef.current);
-          }
-
-          const option: echarts.EChartsOption = {
-            backgroundColor: 'transparent',
-            tooltip: {
-              trigger: 'axis',
-              axisPointer: { type: 'shadow' },
-              backgroundColor: isDark ? '#151824' : '#ffffff',
-              borderColor: isDark ? '#1f2333' : '#e2e8f0',
-              borderWidth: 1,
-              textStyle: {
-                color: isDark ? '#f8fafc' : '#0f172a',
-                fontFamily: 'system-ui',
-                fontSize: 12
-              },
-              formatter: (params: any) => {
-                const item = params[0];
-                return `
-                  <div style="font-weight: 700; margin-bottom: 4px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${item.name}</div>
-                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px;">
-                    <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
-                      <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${item.color};"></span>
-                      总消耗
-                    </span>
-                    <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${item.value.toLocaleString()} Tokens</span>
-                  </div>
-                `;
+          days.forEach(day => {
+            modelsList.forEach(model => {
+              if (timeUnit === 'year') {
+                Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                  if (dateStr.startsWith(day)) {
+                    modelTotals[model] += getTokenValue(dayData[model]);
+                  }
+                });
+              } else {
+                modelTotals[model] += getTokenValue(billingData[day]?.[model]);
               }
-            },
-            grid: {
-              top: '5%',
-              left: '3%',
-              right: '8%',
-              bottom: '5%',
-              containLabel: true
-            },
-            xAxis: {
-              type: 'value',
-              splitLine: {
-                lineStyle: {
-                  color: splitLineColor,
-                  type: 'dashed'
+            });
+          });
+
+          // Map and sort models by total tokens descending.
+          const sortedModels = modelsList
+            .map((model, idx) => ({
+              model,
+              total: modelTotals[model],
+              color: getModelColor(model, idx)
+            }))
+            .filter(item => item.total > 0)
+            .sort((a, b) => a.total - b.total);
+
+          if (sortedModels.length > 0) {
+            const option: echarts.EChartsOption = {
+              backgroundColor: 'transparent',
+              tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'shadow' },
+                backgroundColor: isDark ? '#151824' : '#ffffff',
+                borderColor: isDark ? '#1f2333' : '#e2e8f0',
+                borderWidth: 1,
+                textStyle: {
+                  color: isDark ? '#f8fafc' : '#0f172a',
+                  fontFamily: 'system-ui',
+                  fontSize: 12
+                },
+                formatter: (params: any) => {
+                  const item = params[0];
+                  return `
+                    <div style="font-weight: 700; margin-bottom: 4px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${item.name}</div>
+                    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px;">
+                      <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${item.color};"></span>
+                        总消耗
+                      </span>
+                      <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${item.value.toLocaleString()} Tokens</span>
+                    </div>
+                  `;
                 }
               },
-              axisLabel: {
-                color: textColor,
-                fontSize: 10,
-                fontFamily: 'monospace'
-              }
-            },
-            yAxis: {
-              type: 'category',
-              data: sortedModels.map(item => item.model),
-              axisLine: {
-                lineStyle: { color: gridBorderColor }
+              grid: {
+                top: '5%',
+                left: '3%',
+                right: '8%',
+                bottom: '5%',
+                containLabel: true
               },
-              axisLabel: {
-                color: textColor,
-                fontSize: 11,
-                fontFamily: 'monospace'
-              },
-              axisTick: { show: false }
-            },
-            series: [
-              {
-                type: 'bar',
-                data: sortedModels.map(item => ({
-                  value: item.total,
-                  itemStyle: { color: item.color, borderRadius: [0, 4, 4, 0] }
-                })),
-                barWidth: '40%',
-                label: {
-                  show: true,
-                  position: 'right',
-                  formatter: (params: any) => params.value.toLocaleString(),
+              xAxis: {
+                type: 'value',
+                splitLine: {
+                  lineStyle: {
+                    color: splitLineColor,
+                    type: 'dashed'
+                  }
+                },
+                axisLabel: {
                   color: textColor,
                   fontSize: 10,
                   fontFamily: 'monospace'
                 }
-              }
-            ]
-          };
+              },
+              yAxis: {
+                type: 'category',
+                data: sortedModels.map(item => item.model),
+                axisLine: {
+                  lineStyle: { color: gridBorderColor }
+                },
+                axisLabel: {
+                  color: textColor,
+                  fontSize: 11,
+                  fontFamily: 'monospace'
+                },
+                axisTick: { show: false }
+              },
+              series: [
+                {
+                  type: 'bar',
+                  data: sortedModels.map(item => ({
+                    value: item.total,
+                    itemStyle: { color: item.color, borderRadius: [0, 4, 4, 0] }
+                  })),
+                  barWidth: '40%',
+                  label: {
+                    show: true,
+                    position: 'right',
+                    formatter: (params: any) => params.value.toLocaleString(),
+                    color: textColor,
+                    fontSize: 10,
+                    fontFamily: 'monospace'
+                  }
+                }
+              ]
+            };
 
-          myChart.setOption(option);
-          handleResize = () => myChart?.resize();
-          window.addEventListener('resize', handleResize);
+            myChart.setOption(option, true);
+            handleResize = () => myChart?.resize();
+            window.addEventListener('resize', handleResize);
+            
+            setTimeout(() => {
+              myChart?.resize();
+            }, 50);
+          }
         }
       } catch (e) {
         console.error("Failed to render horizontal chart:", e);
@@ -591,13 +608,6 @@ export default function Dashboard({ lang }: DashboardProps) {
     return () => {
       if (handleResize) {
         window.removeEventListener('resize', handleResize);
-      }
-      if (myChart) {
-        try {
-          myChart.dispose();
-        } catch (e) {
-          console.error("Failed to dispose horizontal chart:", e);
-        }
       }
     };
   }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
@@ -825,152 +835,159 @@ export default function Dashboard({ lang }: DashboardProps) {
           </div>
 
           <div className="w-full relative mt-4">
-            {viewType === 'chart' ? (
+            {/* Vertical Chart Container */}
+            <div 
+              style={{ display: viewType === 'chart' ? 'block' : 'none' }}
+              className="w-full"
+            >
               <div ref={chartRef} className="w-full h-[400px]" />
-            ) : (
-              <div className="w-full flex flex-col">
-                {/* Horizontal Chart for List View */}
-                <div className="w-full border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] p-4 mb-6 shadow-sm">
-                  <div className="text-sm font-bold text-[var(--color-text-primary)] mb-2 select-none">
-                    {lang === 'en' ? 'Model Consumption Breakdown' : '单模型消耗分布 (横状图)'}
-                  </div>
-                  <div ref={horizontalChartRef} className="w-full h-[220px]" />
-                </div>
+            </div>
 
-                <div className="overflow-x-auto border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] max-h-[400px] overflow-y-auto relative">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="text-xs font-bold text-[var(--color-text-secondary)] select-none">
-                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('date')}>
-                          <div className="flex items-center gap-1">
-                            日期
-                            <span className="text-gray-400">
-                              {sortField === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-                            </span>
-                          </div>
-                        </th>
-                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('model')}>
-                          <div className="flex items-center gap-1">
-                            模型
-                            <span className="text-gray-400">
-                              {sortField === 'model' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-                            </span>
-                          </div>
-                        </th>
-                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('total')}>
-                          <div className="flex items-center gap-1">
-                            总 Token 数
-                            <span className="text-gray-400">
-                              {sortField === 'total' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-                            </span>
-                          </div>
-                        </th>
-                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('cached')}>
-                          <div className="flex items-center gap-1">
-                            输入 (命中缓存) Token 数
-                            <span className="text-gray-400">
-                              {sortField === 'cached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-                            </span>
-                          </div>
-                        </th>
-                        <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('uncached')}>
-                          <div className="flex items-center gap-1">
-                            输入 (未命中缓存) Token 数
-                            <span className="text-gray-400">
-                              {sortField === 'uncached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
-                            </span>
-                          </div>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-[var(--color-border-base)]/50 text-[13px] font-medium text-[var(--color-text-primary)]">
-                      {paginatedRows.length === 0 ? (
-                        <tr>
-                          <td colSpan={5} className="p-8 text-center text-[var(--color-text-muted)]">
-                            暂无消耗记录
-                          </td>
-                        </tr>
-                      ) : (
-                        paginatedRows.map((row, idx) => (
-                          <tr key={idx} className="hover:bg-[var(--color-bg-hover)]/30 transition-colors">
-                            <td className="p-4 font-mono">{row.date}</td>
-                            <td className="p-4">
-                              <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)]">
-                                {row.model}
-                              </span>
-                            </td>
-                            <td className="p-4 font-mono font-bold text-blue-600 dark:text-blue-400">{row.total.toLocaleString()}</td>
-                            <td className="p-4 font-mono text-emerald-600 dark:text-emerald-400">{row.cached.toLocaleString()}</td>
-                            <td className="p-4 font-mono text-amber-600 dark:text-amber-400">{row.uncached.toLocaleString()}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
+            {/* List View Container */}
+            <div 
+              style={{ display: viewType === 'list' ? 'flex' : 'none' }}
+              className="w-full flex flex-col"
+            >
+              {/* Horizontal Chart for List View */}
+              <div className="w-full border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] p-4 mb-6 shadow-sm">
+                <div className="text-sm font-bold text-[var(--color-text-primary)] mb-2 select-none">
+                  {lang === 'en' ? 'Model Consumption Breakdown' : '单模型消耗分布 (横状图)'}
                 </div>
- 
-                {/* 分页控制栏 */}
-                {totalCount > 0 && (
-                  <div className="flex items-center justify-between mt-4 px-1 select-none text-xs font-bold text-[var(--color-text-secondary)] font-sans">
-                    <div>
-                      共 {totalCount} 条
-                    </div>
-                    <div className="flex items-center gap-4">
-                      {/* 页码选择 */}
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          disabled={currentPage === 1}
-                          onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                          className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
-                        >
-                          &lt;
-                        </button>
-                        {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
-                          <button
-                            key={p}
-                            onClick={() => setCurrentPage(p)}
-                            className={`w-7 h-7 rounded-lg border text-center flex items-center justify-center cursor-pointer transition-all ${
-                              currentPage === p
-                                ? 'bg-blue-500 border-blue-500 text-white shadow-sm font-bold'
-                                : 'border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'
-                            }`}
-                          >
-                            {p}
-                          </button>
-                        ))}
-                        <button
-                          disabled={currentPage === totalPages}
-                          onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                          className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
-                        >
-                          &gt;
-                        </button>
-                      </div>
- 
-                      {/* 每页数量选择 */}
-                      <div className="relative flex items-center">
-                        <select
-                          value={pageSize}
-                          onChange={(e) => {
-                            setPageSize(Number(e.target.value));
-                            setCurrentPage(1);
-                          }}
-                          className="appearance-none bg-[var(--color-bg-card)] dark:bg-slate-900 border border-[var(--color-border-base)] rounded-lg pl-3 pr-8 py-1.5 font-bold text-[var(--color-text-primary)] cursor-pointer focus:outline-none hover:border-[var(--color-primary)] transition-all"
-                        >
-                          <option value={5} className="dark:bg-slate-900">5 条/页</option>
-                          <option value={10} className="dark:bg-slate-900">10 条/页</option>
-                          <option value={20} className="dark:bg-slate-900">20 条/页</option>
-                          <option value={50} className="dark:bg-slate-900">50 条/页</option>
-                        </select>
-                        <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500" />
-                      </div>
-                    </div>
-                  </div>
-                )}
+                <div ref={horizontalChartRef} className="w-full h-[220px]" />
               </div>
-            )}
-          </div>
 
+              <div className="overflow-x-auto border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] max-h-[400px] overflow-y-auto relative">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="text-xs font-bold text-[var(--color-text-secondary)] select-none">
+                      <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('date')}>
+                        <div className="flex items-center gap-1">
+                          日期
+                          <span className="text-gray-400">
+                            {sortField === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </div>
+                      </th>
+                      <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('model')}>
+                        <div className="flex items-center gap-1">
+                          模型
+                          <span className="text-gray-400">
+                            {sortField === 'model' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </div>
+                      </th>
+                      <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('total')}>
+                        <div className="flex items-center gap-1">
+                          总 Token 数
+                          <span className="text-gray-400">
+                            {sortField === 'total' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </div>
+                      </th>
+                      <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('cached')}>
+                        <div className="flex items-center gap-1">
+                          输入 (命中缓存) Token 数
+                          <span className="text-gray-400">
+                            {sortField === 'cached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </div>
+                      </th>
+                      <th className="p-4 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors sticky top-0 bg-[var(--color-bg-sidebar)] border-b border-[var(--color-border-base)] z-10" onClick={() => handleSort('uncached')}>
+                        <div className="flex items-center gap-1">
+                          输入 (未命中缓存) Token 数
+                          <span className="text-gray-400">
+                            {sortField === 'uncached' ? (sortDirection === 'asc' ? '▲' : '▼') : '↕'}
+                          </span>
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[var(--color-border-base)]/50 text-[13px] font-medium text-[var(--color-text-primary)]">
+                    {paginatedRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="p-8 text-center text-[var(--color-text-muted)]">
+                          暂无消耗记录
+                        </td>
+                      </tr>
+                    ) : (
+                      paginatedRows.map((row, idx) => (
+                        <tr key={idx} className="hover:bg-[var(--color-bg-hover)]/30 transition-colors">
+                          <td className="p-4 font-mono">{row.date}</td>
+                          <td className="p-4">
+                            <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-[var(--color-bg-sidebar)] border border-[var(--color-border-base)]">
+                              {row.model}
+                            </span>
+                          </td>
+                          <td className="p-4 font-mono font-bold text-blue-600 dark:text-blue-400">{row.total.toLocaleString()}</td>
+                          <td className="p-4 font-mono text-emerald-600 dark:text-emerald-400">{row.cached.toLocaleString()}</td>
+                          <td className="p-4 font-mono text-amber-600 dark:text-amber-400">{row.uncached.toLocaleString()}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* 分页控制栏 */}
+              {totalCount > 0 && (
+                <div className="flex items-center justify-between mt-4 px-1 select-none text-xs font-bold text-[var(--color-text-secondary)] font-sans">
+                  <div>
+                    共 {totalCount} 条
+                  </div>
+                  <div className="flex items-center gap-4">
+                    {/* 页码选择 */}
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        disabled={currentPage === 1}
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
+                      >
+                        &lt;
+                      </button>
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
+                        <button
+                          key={p}
+                          onClick={() => setCurrentPage(p)}
+                          className={`w-7 h-7 rounded-lg border text-center flex items-center justify-center cursor-pointer transition-all ${
+                            currentPage === p
+                              ? 'bg-blue-500 border-blue-500 text-white shadow-sm font-bold'
+                              : 'border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      <button
+                        disabled={currentPage === totalPages}
+                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                        className="p-1.5 rounded-lg border border-[var(--color-border-base)] bg-[var(--color-bg-card)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-[var(--color-border-base)] disabled:hover:text-[var(--color-text-secondary)] cursor-pointer"
+                      >
+                        &gt;
+                      </button>
+                    </div>
+
+                    {/* 每页数量选择 */}
+                    <div className="relative flex items-center">
+                      <select
+                        value={pageSize}
+                        onChange={(e) => {
+                          setPageSize(Number(e.target.value));
+                          setCurrentPage(1);
+                        }}
+                        className="appearance-none bg-[var(--color-bg-card)] dark:bg-slate-900 border border-[var(--color-border-base)] rounded-lg pl-3 pr-8 py-1.5 font-bold text-[var(--color-text-primary)] cursor-pointer focus:outline-none hover:border-[var(--color-primary)] transition-all"
+                      >
+                        <option value={5} className="dark:bg-slate-900">5 条/页</option>
+                        <option value={10} className="dark:bg-slate-900">10 条/页</option>
+                        <option value={20} className="dark:bg-slate-900">20 条/页</option>
+                        <option value={50} className="dark:bg-slate-900">50 条/页</option>
+                      </select>
+                      <ChevronDown className="w-3.5 h-3.5 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-500" />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>
