@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
@@ -143,7 +143,7 @@ app.use((req, _res, next) => {
 // ---- Local Token Authentication ----
 app.use((req, res, next) => {
   if (!process.env.LOCAL_AUTH_TOKEN) return next();
-  if (req.url.startsWith("/api/") || req.url.startsWith("/v1/")) {
+  if (req.url.startsWith("/api/")) {
     if (req.method === "OPTIONS") return next();
     if (req.url === "/health") return next();
     const token = req.headers["x-local-token"] || req.query.token;
@@ -1865,11 +1865,11 @@ app.post("/v1/chat/completions", async (req, res) => {
   
   const body = req.body;
   const activeSkillId = body.activeSkillId || "";
-  const useAgent = body.useAgent !== false; // Active by default in custom chat
+  const useAgent = body.useAgent; // undefined = no agent, true = Build mode, false = Plan mode
   
   // Persistent Caching Check
   let cacheKey: string | null = null;
-  const canUseResponseCache = body.useAgent === false && !body.activeSkillId && !body.workspacePath && !body.tool_choice && !body.tools;
+  const canUseResponseCache = body.useAgent === undefined && !body.activeSkillId && !body.workspacePath && !body.tool_choice && !body.tools;
   if (loadConfig().cacheEnabled && canUseResponseCache) {
     cacheKey = computeCacheKey(body);
     const cached = getCachedResponse(cacheKey);
@@ -1916,10 +1916,12 @@ app.post("/v1/chat/completions", async (req, res) => {
     }
   }
 
-  // Inject Workspace and Skills System Prompts if useAgent is true
-  if (useAgent) {
-    let agentPrompt = `[Agentic Mode (Build)]
-You are running in Build (Agentic) mode. You have access to internal/built-in agent skills under "${SKILLS_DIR}". You can list, detail, and execute scripts from these skills using available tools to automate tasks (e.g., editing documents, Excel, PPT files, writing scripts, running tests).
+  // Inject Workspace and Skills System Prompts if useAgent is defined
+  if (useAgent !== undefined) {
+    let agentPrompt = "";
+    if (useAgent === true) {
+      agentPrompt = `[Agentic Mode (Build)]
+You are running in Build (Agentic) mode. You have full edit and execution access to automate coding tasks. You have access to internal/built-in agent skills under "${SKILLS_DIR}". You can list, detail, and execute scripts from these skills using available tools to automate tasks (e.g., editing documents, Excel, PPT files, writing scripts, running tests).
 
 [Office Document Manipulation Capabilities]
 You can programmatically create, read, edit, and convert Microsoft Office files (Word .docx, Excel .xlsx, PowerPoint .pptx) and PDFs using Python libraries.
@@ -1949,8 +1951,24 @@ When the user issues a command that requires multiple steps, you must:
 2. Execute each task sequentially by calling the appropriate tools.
 3. Update the task status (e.g. change [ ] to [/] and then to [x]) in your follow-up text responses after tool executions, and continue this loop until all tasks are finished.
 ` + getSkillsSystemPrompt();
+    } else {
+      // Plan Mode (useAgent === false)
+      agentPrompt = `[Agentic Mode (Plan)]
+You are running in Plan (Read-Only) mode. You are an expert AI planning agent.
+You can read, search, and analyze files in the workspace using read-only tools, but you CANNOT write files, run scripts, execute terminal commands, or use MCP tools.
+Your goal is to thoroughly research the codebase/task and produce a detailed, step-by-step implementation plan or roadmap in task list format (e.g. - [ ] tasks). Do not attempt to modify any files or run commands.
+
+[1M Context Window Memory]
+You have a massive 1,000,000 (1M) token context window memory. You can read, process, and retain large files, extensive project logs, and multiple workspace documents simultaneously without losing context.
+`;
+    }
+
     if (body.workspacePath) {
-      agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou can use list_workspace_files, read_workspace_file, write_workspace_file, patch_workspace_file, search_grep, and glob_files to scan, inspect, edit, modify, search, or create files inside this workspace directory. When modifying existing files, you should prefer using patch_workspace_file to perform precise search-and-replace edits instead of rewriting the entire file. Use search_grep to search for specific code patterns (like function names or imports) recursively in the workspace. Use glob_files to list files matching a specific pattern. Use these capabilities to autonomously read and edit workspace documents or run skill scripts directly to finish editing work.`;
+      if (useAgent === true) {
+        agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou can use list_workspace_files, read_workspace_file, write_workspace_file, patch_workspace_file, search_grep, and glob_files to scan, inspect, edit, modify, search, or create files inside this workspace directory. When modifying existing files, you should prefer using patch_workspace_file to perform precise search-and-replace edits instead of rewriting the entire file. Use search_grep to search for specific code patterns (like function names or imports) recursively in the workspace. Use glob_files to list files matching a specific pattern. Use these capabilities to autonomously read and edit workspace documents or run skill scripts directly to finish editing work.`;
+      } else {
+        agentPrompt += `\n[Active Workspace Directory]\nYou are working inside the active workspace directory: "${body.workspacePath}".\nYou have read-only access. You can use list_workspace_files, read_workspace_file, search_grep, and glob_files to scan, inspect, and search files inside this workspace directory. You cannot use write_workspace_file, patch_workspace_file, run_terminal_command, run_skill_script, or any MCP tools. Please use the read-only capabilities to analyze the code and prepare a detailed plan.`;
+      }
     } else {
       agentPrompt += `\nNo active workspace folder is currently selected. If you need to access files, please ask the user to select or edit the workspace directory using the UI.`;
     }
@@ -1980,26 +1998,8 @@ When the user issues a command that requires multiple steps, you must:
 
   // Collect Tools: Active Skill scripts + MCP tools + built-in workspace & skill tools
   let tools = [...(body.tools || [])];
-  if (useAgent) {
-    // 1. Add workspace & internal skills tools
-    tools.push({
-      type: "function",
-      function: {
-        name: "run_terminal_command",
-        description: "Execute a terminal command on the host machine using PowerShell within the active workspace directory.",
-        parameters: {
-          type: "object",
-          properties: {
-            command: {
-              type: "string",
-              description: "The exact shell command to run (e.g. 'npm run build', 'git status', 'python test.py', etc.)"
-            }
-          },
-          required: ["command"]
-        }
-      }
-    });
-
+  if (useAgent !== undefined) {
+    // 1. Read-only tools (always added in both Plan and Build modes)
     tools.push({
       type: "function",
       function: {
@@ -2022,54 +2022,6 @@ When the user issues a command that requires multiple steps, you must:
             }
           },
           required: ["relativeFilePath"]
-        }
-      }
-    });
-
-    tools.push({
-      type: "function",
-      function: {
-        name: "write_workspace_file",
-        description: "Create or overwrite a file in the active workspace with the provided content.",
-        parameters: {
-          type: "object",
-          properties: {
-            relativeFilePath: {
-              type: "string",
-              description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx' or 'document.txt')"
-            },
-            content: {
-              type: "string",
-              description: "The complete content to write into the file"
-            }
-          },
-          required: ["relativeFilePath", "content"]
-        }
-      }
-    });
-
-    tools.push({
-      type: "function",
-      function: {
-        name: "patch_workspace_file",
-        description: "Perform a search-and-replace modification inside an existing file in the active workspace. Provide the exact text to match, and the replacement text.",
-        parameters: {
-          type: "object",
-          properties: {
-            relativeFilePath: {
-              type: "string",
-              description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx')"
-            },
-            searchContent: {
-              type: "string",
-              description: "The exact, unique block of code/text in the file that you want to replace. Spacing, indentation, and newlines must match the file content exactly."
-            },
-            replacementContent: {
-              type: "string",
-              description: "The replacement content to substitute for the matched searchContent block."
-            }
-          },
-          required: ["relativeFilePath", "searchContent", "replacementContent"]
         }
       }
     });
@@ -2140,43 +2092,112 @@ When the user issues a command that requires multiple steps, you must:
       }
     });
 
-    tools.push({
-      type: "function",
-      function: {
-        name: "run_skill_script",
-        description: "Execute a script inside a skill folder (e.g. standard python/js automation tool script) with arguments, and return the execution results.",
-        parameters: {
-          type: "object",
-          properties: {
-            skillId: {
-              type: "string",
-              description: "The skill ID containing the script"
-            },
-            scriptName: {
-              type: "string",
-              description: "The filename of the script to run (e.g. 'generate_report.py')"
-            },
-            arguments: {
-              type: "array",
-              items: { type: "string" },
-              description: "List of string arguments to pass to the script"
-            }
-          },
-          required: ["skillId", "scriptName", "arguments"]
-        }
-      }
-    });
-
-    const mcpTools = getAllMCPTools();
-    for (const tool of mcpTools) {
+    // 2. Modifying and executing tools (only added in Build mode)
+    if (useAgent === true) {
       tools.push({
         type: "function",
         function: {
-          name: `mcp_${tool.serverName}_${tool.name}`,
-          description: tool.description,
-          parameters: tool.inputSchema
+          name: "run_terminal_command",
+          description: "Execute a terminal command on the host machine using PowerShell within the active workspace directory.",
+          parameters: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                description: "The exact shell command to run (e.g. 'npm run build', 'git status', 'python test.py', etc.)"
+              }
+            },
+            required: ["command"]
+          }
         }
       });
+
+      tools.push({
+        type: "function",
+        function: {
+          name: "write_workspace_file",
+          description: "Create or overwrite a file in the active workspace with the provided content.",
+          parameters: {
+            type: "object",
+            properties: {
+              relativeFilePath: {
+                type: "string",
+                description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx' or 'document.txt')"
+              },
+              content: {
+                type: "string",
+                description: "The complete content to write into the file"
+              }
+            },
+            required: ["relativeFilePath", "content"]
+          }
+        }
+      });
+
+      tools.push({
+        type: "function",
+        function: {
+          name: "patch_workspace_file",
+          description: "Perform a search-and-replace modification inside an existing file in the active workspace. Provide the exact text to match, and the replacement text.",
+          parameters: {
+            type: "object",
+            properties: {
+              relativeFilePath: {
+                type: "string",
+                description: "The relative path of the file from the workspace root (e.g. 'src/App.tsx')"
+              },
+              searchContent: {
+                type: "string",
+                description: "The exact, unique block of code/text in the file that you want to replace. Spacing, indentation, and newlines must match the file content exactly."
+              },
+              replacementContent: {
+                type: "string",
+                description: "The replacement content to substitute for the matched searchContent block."
+              }
+            },
+            required: ["relativeFilePath", "searchContent", "replacementContent"]
+          }
+        }
+      });
+
+      tools.push({
+        type: "function",
+        function: {
+          name: "run_skill_script",
+          description: "Execute a script inside a skill folder (e.g. standard python/js automation tool script) with arguments, and return the execution results.",
+          parameters: {
+            type: "object",
+            properties: {
+              skillId: {
+                type: "string",
+                description: "The skill ID containing the script"
+              },
+              scriptName: {
+                type: "string",
+                description: "The filename of the script to run (e.g. 'generate_report.py')"
+              },
+              arguments: {
+                type: "array",
+                items: { type: "string" },
+                description: "List of string arguments to pass to the script"
+              }
+            },
+            required: ["skillId", "scriptName", "arguments"]
+          }
+        }
+      });
+
+      const mcpTools = getAllMCPTools();
+      for (const tool of mcpTools) {
+        tools.push({
+          type: "function",
+          function: {
+            name: `mcp_${tool.serverName}_${tool.name}`,
+            description: tool.description,
+            parameters: tool.inputSchema
+          }
+        });
+      }
     }
   }
 

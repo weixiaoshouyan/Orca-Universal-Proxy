@@ -32,6 +32,7 @@ export default function Dashboard({ lang }: DashboardProps) {
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
 
   const chartRef = useRef<HTMLDivElement>(null);
+  const horizontalChartRef = useRef<HTMLDivElement>(null);
   const calendarRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -226,205 +227,380 @@ export default function Dashboard({ lang }: DashboardProps) {
     const isDark = document.documentElement.classList.contains('dark');
     const textColor = isDark ? '#94a3b8' : '#475569';
 
-    if (viewType === 'chart' && chartRef.current) {
-      const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-      const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
-      const myChart = echarts.init(chartRef.current);
+    let myChart: echarts.ECharts | undefined;
+    let handleResize: (() => void) | undefined;
 
-      // Build series data
-      const lineSeriesList = modelsList.map((model, idx) => {
-        const data = days.map(day => {
-          if (timeUnit === 'year') {
-            let sum = 0;
-            Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
-              if (dateStr.startsWith(day)) {
-                sum += getTokenValue(dayData[model]);
-              }
-            });
-            return sum;
-          } else {
-            return getTokenValue(billingData[day]?.[model]);
-          }
+    if (viewType === 'chart' && chartRef.current) {
+      try {
+        const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
+        const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+        
+        myChart = echarts.getInstanceByDom(chartRef.current);
+        if (!myChart) {
+          myChart = echarts.init(chartRef.current);
+        }
+
+        // Build series data
+        const lineSeriesList = modelsList.map((model, idx) => {
+          const data = days.map(day => {
+            if (timeUnit === 'year') {
+              let sum = 0;
+              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                if (dateStr.startsWith(day)) {
+                  sum += getTokenValue(dayData[model]);
+                }
+              });
+              return sum;
+            } else {
+              return getTokenValue(billingData[day]?.[model]);
+            }
+          });
+
+          const color = getModelColor(model, idx);
+          return {
+            name: model,
+            type: 'line' as const,
+            smooth: true,
+            symbol: 'circle',
+            symbolSize: 6,
+            showSymbol: true,
+            itemStyle: {
+              color: color,
+              borderColor: '#ffffff',
+              borderWidth: 1.5
+            },
+            lineStyle: {
+              width: 2.5,
+              color: color
+            },
+            data
+          };
         });
 
-        const color = getModelColor(model, idx);
-        return {
-          name: model,
+        const lineData = days.map(day => {
+          let sum = 0;
+          modelsList.forEach(model => {
+            if (timeUnit === 'year') {
+              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                if (dateStr.startsWith(day)) {
+                  sum += getTokenValue(dayData[model]);
+                }
+              });
+            } else {
+              sum += getTokenValue(billingData[day]?.[model]);
+            }
+          });
+          return sum;
+        });
+
+        const lineSeries = {
+          name: 'Token 总消耗',
           type: 'line' as const,
           smooth: true,
           symbol: 'circle',
-          symbolSize: 6,
+          symbolSize: 8,
           showSymbol: true,
           itemStyle: {
-            color: color,
+            color: '#3b82f6',
             borderColor: '#ffffff',
-            borderWidth: 1.5
+            borderWidth: 2
           },
           lineStyle: {
-            width: 2.5,
-            color: color
+            width: 3,
+            color: '#3b82f6',
+            shadowColor: 'rgba(59, 130, 246, 0.3)',
+            shadowBlur: 8,
+            shadowOffsetY: 4
           },
-          data
+          areaStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
+              { offset: 1, color: 'rgba(59, 130, 246, 0)' }
+            ])
+          },
+          data: lineData
         };
-      });
 
-      const lineData = days.map(day => {
-        let sum = 0;
-        modelsList.forEach(model => {
-          if (timeUnit === 'year') {
-            Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
-              if (dateStr.startsWith(day)) {
-                sum += getTokenValue(dayData[model]);
+        const series = displayMode === 'total' ? [...lineSeriesList, lineSeries] : lineSeriesList;
+
+        const option: echarts.EChartsOption = {
+          backgroundColor: 'transparent',
+          tooltip: {
+            trigger: 'axis',
+            axisPointer: {
+              type: 'shadow'
+            },
+            backgroundColor: isDark ? '#151824' : '#ffffff',
+            borderColor: isDark ? '#1f2333' : '#e2e8f0',
+            borderWidth: 1,
+            textStyle: {
+              color: isDark ? '#f8fafc' : '#0f172a',
+              fontFamily: 'system-ui',
+              fontSize: 12
+            },
+            formatter: (params: any) => {
+              let date = params[0].axisValue;
+              let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
+              
+              const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
+              const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
+              
+              const sortedParams = [];
+              if (lineItem && displayMode === 'total') {
+                sortedParams.push(lineItem);
               }
-            });
-          } else {
-            sum += getTokenValue(billingData[day]?.[model]);
-          }
-        });
-        return sum;
-      });
-
-      const lineSeries = {
-        name: 'Token 总消耗',
-        type: 'line' as const,
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: 8,
-        showSymbol: true,
-        itemStyle: {
-          color: '#3b82f6',
-          borderColor: '#ffffff',
-          borderWidth: 2
-        },
-        lineStyle: {
-          width: 3,
-          color: '#3b82f6',
-          shadowColor: 'rgba(59, 130, 246, 0.3)',
-          shadowBlur: 8,
-          shadowOffsetY: 4
-        },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(59, 130, 246, 0.15)' },
-            { offset: 1, color: 'rgba(59, 130, 246, 0)' }
-          ])
-        },
-        data: lineData
-      };
-
-      const series = displayMode === 'total' ? [...lineSeriesList, lineSeries] : lineSeriesList;
-
-      const option: echarts.EChartsOption = {
-        backgroundColor: 'transparent',
-        tooltip: {
-          trigger: 'axis',
-          axisPointer: {
-            type: 'shadow'
-          },
-          backgroundColor: isDark ? '#151824' : '#ffffff',
-          borderColor: isDark ? '#1f2333' : '#e2e8f0',
-          borderWidth: 1,
-          textStyle: {
-            color: isDark ? '#f8fafc' : '#0f172a',
-            fontFamily: 'system-ui',
-            fontSize: 12
-          },
-          formatter: (params: any) => {
-            let date = params[0].axisValue;
-            let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
-            
-            const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
-            const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
-            
-            const sortedParams = [];
-            if (lineItem && displayMode === 'total') {
-              sortedParams.push(lineItem);
-            }
-            sortedParams.push(...barItems);
-            
-            sortedParams.forEach((item: any) => {
-              const val = item.value || 0;
-              const color = item.color;
-              tooltipHtml += `
-                <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
-                  <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
-                    <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
-                    ${item.seriesName}
-                  </span>
-                  <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
-                </div>
-              `;
-            });
-            
-            return tooltipHtml;
-          }
-        },
-        legend: {
-          show: false,
-          top: '2%',
-          left: 'center',
-          textStyle: {
-            color: textColor,
-            fontSize: 11,
-            fontFamily: 'system-ui'
-          },
-          itemGap: 16
-        },
-        grid: {
-          top: '15%',
-          left: '2%',
-          right: '2%',
-          bottom: '8%',
-          containLabel: true
-        },
-        xAxis: {
-          type: 'category',
-          data: days,
-          axisLine: {
-            lineStyle: {
-              color: gridBorderColor
+              sortedParams.push(...barItems);
+              
+              sortedParams.forEach((item: any) => {
+                const val = item.value || 0;
+                const color = item.color;
+                tooltipHtml += `
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
+                    <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                      <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
+                      ${item.seriesName}
+                    </span>
+                    <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
+                  </div>
+                `;
+              });
+              
+              return tooltipHtml;
             }
           },
-          axisLabel: {
-            color: textColor,
-            fontSize: 10,
-            fontFamily: 'monospace',
-            interval: timeUnit === 'year' ? 0 : 2
+          legend: {
+            show: false,
+            top: '2%',
+            left: 'center',
+            textStyle: {
+              color: textColor,
+              fontSize: 11,
+              fontFamily: 'system-ui'
+            },
+            itemGap: 16
           },
-          axisTick: {
-            show: false
-          }
-        },
-        yAxis: {
-          type: 'value',
-          splitLine: {
-            lineStyle: {
-              color: splitLineColor,
-              type: 'dashed'
+          grid: {
+            top: '15%',
+            left: '2%',
+            right: '2%',
+            bottom: '8%',
+            containLabel: true
+          },
+          xAxis: {
+            type: 'category',
+            data: days,
+            axisLine: {
+              lineStyle: {
+                color: gridBorderColor
+              }
+            },
+            axisLabel: {
+              color: textColor,
+              fontSize: 10,
+              fontFamily: 'monospace',
+              interval: timeUnit === 'year' ? 0 : 2
+            },
+            axisTick: {
+              show: false
             }
           },
-          axisLabel: {
-            color: textColor,
-            fontSize: 10,
-            fontFamily: 'monospace',
-            formatter: (value: number) => {
-              if (value === 0) return '0';
-              return (value / 1000) + 'k';
+          yAxis: {
+            type: 'value',
+            splitLine: {
+              lineStyle: {
+                color: splitLineColor,
+                type: 'dashed'
+              }
+            },
+            axisLabel: {
+              color: textColor,
+              fontSize: 10,
+              fontFamily: 'monospace',
+              formatter: (value: number) => {
+                if (value === 0) return '0';
+                return (value / 1000) + 'k';
+              }
             }
-          }
-        },
-        series
-      };
+          },
+          series
+        };
 
-      myChart.setOption(option);
-      const handleResize = () => myChart.resize();
-      window.addEventListener('resize', handleResize);
-      return () => {
-        window.removeEventListener('resize', handleResize);
-        myChart.dispose();
-      };
+        myChart.setOption(option);
+        handleResize = () => myChart?.resize();
+        window.addEventListener('resize', handleResize);
+      } catch (e) {
+        console.error("Failed to render vertical chart:", e);
+      }
     }
-  }, [viewType, billingData, days, displayMode, themeChanged, timeUnit]);
+
+    return () => {
+      if (handleResize) {
+        window.removeEventListener('resize', handleResize);
+      }
+      if (myChart) {
+        try {
+          myChart.dispose();
+        } catch (e) {
+          console.error("Failed to dispose vertical chart:", e);
+        }
+      }
+    };
+  }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
+
+  // Horizontal Chart Effect Hook for List View
+  useEffect(() => {
+    const isDark = document.documentElement.classList.contains('dark');
+    const textColor = isDark ? '#94a3b8' : '#475569';
+
+    let myChart: echarts.ECharts | undefined;
+    let handleResize: (() => void) | undefined;
+
+    if (viewType === 'list' && horizontalChartRef.current) {
+      try {
+        const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
+        const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+
+        // Calculate cumulative totals per model for selected range
+        const modelTotals: Record<string, number> = {};
+        modelsList.forEach(model => {
+          modelTotals[model] = 0;
+        });
+
+        days.forEach(day => {
+          modelsList.forEach(model => {
+            if (timeUnit === 'year') {
+              Object.entries(billingData).forEach(([dateStr, dayData]: any) => {
+                if (dateStr.startsWith(day)) {
+                  modelTotals[model] += getTokenValue(dayData[model]);
+                }
+              });
+            } else {
+              modelTotals[model] += getTokenValue(billingData[day]?.[model]);
+            }
+          });
+        });
+
+        // Map and sort models by total tokens descending.
+        // In ECharts, y-axis category data is rendered from bottom to top,
+        // so to show descending from top to bottom, we sort ascending in the array.
+        const sortedModels = modelsList
+          .map((model, idx) => ({
+            model,
+            total: modelTotals[model],
+            color: getModelColor(model, idx)
+          }))
+          .filter(item => item.total > 0)
+          .sort((a, b) => a.total - b.total);
+
+        if (sortedModels.length > 0) {
+          myChart = echarts.getInstanceByDom(horizontalChartRef.current);
+          if (!myChart) {
+            myChart = echarts.init(horizontalChartRef.current);
+          }
+
+          const option: echarts.EChartsOption = {
+            backgroundColor: 'transparent',
+            tooltip: {
+              trigger: 'axis',
+              axisPointer: { type: 'shadow' },
+              backgroundColor: isDark ? '#151824' : '#ffffff',
+              borderColor: isDark ? '#1f2333' : '#e2e8f0',
+              borderWidth: 1,
+              textStyle: {
+                color: isDark ? '#f8fafc' : '#0f172a',
+                fontFamily: 'system-ui',
+                fontSize: 12
+              },
+              formatter: (params: any) => {
+                const item = params[0];
+                return `
+                  <div style="font-weight: 700; margin-bottom: 4px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${item.name}</div>
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px;">
+                    <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                      <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${item.color};"></span>
+                      总消耗
+                    </span>
+                    <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${item.value.toLocaleString()} Tokens</span>
+                  </div>
+                `;
+              }
+            },
+            grid: {
+              top: '5%',
+              left: '3%',
+              right: '8%',
+              bottom: '5%',
+              containLabel: true
+            },
+            xAxis: {
+              type: 'value',
+              splitLine: {
+                lineStyle: {
+                  color: splitLineColor,
+                  type: 'dashed'
+                }
+              },
+              axisLabel: {
+                color: textColor,
+                fontSize: 10,
+                fontFamily: 'monospace'
+              }
+            },
+            yAxis: {
+              type: 'category',
+              data: sortedModels.map(item => item.model),
+              axisLine: {
+                lineStyle: { color: gridBorderColor }
+              },
+              axisLabel: {
+                color: textColor,
+                fontSize: 11,
+                fontFamily: 'monospace'
+              },
+              axisTick: { show: false }
+            },
+            series: [
+              {
+                type: 'bar',
+                data: sortedModels.map(item => ({
+                  value: item.total,
+                  itemStyle: { color: item.color, borderRadius: [0, 4, 4, 0] }
+                })),
+                barWidth: '40%',
+                label: {
+                  show: true,
+                  position: 'right',
+                  formatter: (params: any) => params.value.toLocaleString(),
+                  color: textColor,
+                  fontSize: 10,
+                  fontFamily: 'monospace'
+                }
+              }
+            ]
+          };
+
+          myChart.setOption(option);
+          handleResize = () => myChart?.resize();
+          window.addEventListener('resize', handleResize);
+        }
+      } catch (e) {
+        console.error("Failed to render horizontal chart:", e);
+      }
+    }
+
+    return () => {
+      if (handleResize) {
+        window.removeEventListener('resize', handleResize);
+      }
+      if (myChart) {
+        try {
+          myChart.dispose();
+        } catch (e) {
+          console.error("Failed to dispose horizontal chart:", e);
+        }
+      }
+    };
+  }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
 
   const handleExport = () => {
     let csvContent = '\uFEFF'; // Add BOM for Excel UTF-8 Chinese compatibility
@@ -653,6 +829,14 @@ export default function Dashboard({ lang }: DashboardProps) {
               <div ref={chartRef} className="w-full h-[400px]" />
             ) : (
               <div className="w-full flex flex-col">
+                {/* Horizontal Chart for List View */}
+                <div className="w-full border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] p-4 mb-6 shadow-sm">
+                  <div className="text-sm font-bold text-[var(--color-text-primary)] mb-2 select-none">
+                    {lang === 'en' ? 'Model Consumption Breakdown' : '单模型消耗分布 (横状图)'}
+                  </div>
+                  <div ref={horizontalChartRef} className="w-full h-[220px]" />
+                </div>
+
                 <div className="overflow-x-auto border border-[var(--color-border-base)] rounded-xl bg-[var(--color-bg-card)] max-h-[400px] overflow-y-auto relative">
                   <table className="w-full text-left border-collapse">
                     <thead>
