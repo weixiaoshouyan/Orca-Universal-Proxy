@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // src/transform.ts
 // Protocol transformation: Responses API <-> Chat Completions API
 // Used by Codex CLI proxying
@@ -199,9 +199,9 @@ export interface StreamState {
   fullText: string;
   reasoningContent: string;
   started: boolean;
-  toolCalls: Map<number, { id: string; name: string; arguments: string }>;
+  toolCalls: Map<number, { id: string; name: string; arguments: string; fcId: string }>;
   finishReason: string | null;
-  usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | null;
+  usage: { input_tokens: number; output_tokens: number; total_tokens: number; input_tokens_details?: { cached_tokens: number } } | null;
 }
 
 export function createStreamState(model: string): StreamState {
@@ -249,8 +249,15 @@ export function generateStartEvents(state: StreamState): string {
 
 export function processChunk(state: StreamState, chunk: Record<string, unknown>): string {
   let out = "";
-  const usage = chunk.usage as { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
-  if (usage) state.usage = usage;
+  const rawUsage = chunk.usage as Record<string, any> | undefined;
+  if (rawUsage) {
+    state.usage = {
+      input_tokens: rawUsage.prompt_tokens || 0,
+      output_tokens: rawUsage.completion_tokens || 0,
+      total_tokens: rawUsage.total_tokens || ((rawUsage.prompt_tokens || 0) + (rawUsage.completion_tokens || 0)),
+      ...(rawUsage.prompt_tokens_details?.cached_tokens !== undefined ? { input_tokens_details: { cached_tokens: rawUsage.prompt_tokens_details.cached_tokens } } : {}),
+    };
+  }
 
   const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
   if (!choices || choices.length === 0) return out;
@@ -282,14 +289,15 @@ export function processChunk(state: StreamState, chunk: Record<string, unknown>)
       const idx = tc.index as number;
       const fn = (tc.function || {}) as Record<string, unknown>;
       if (!state.toolCalls.has(idx)) {
+        const newFcId = `fc_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
         state.toolCalls.set(idx, {
           id: (tc.id as string) || `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
-          name: (fn.name as string) || "", arguments: "",
+          name: (fn.name as string) || "", arguments: "", fcId: newFcId,
         });
         const tcData = state.toolCalls.get(idx)!;
         out += sse("response.output_item.added", {
           type: "response.output_item.added", output_index: idx,
-          item: { type: "function_call", id: `fc_${randomUUID().replace(/-/g, "").slice(0, 24)}`, call_id: tcData.id, name: tcData.name, arguments: "", status: "in_progress" },
+          item: { type: "function_call", id: tcData.fcId, call_id: tcData.id, name: tcData.name, arguments: "", status: "in_progress" },
         });
       }
       const tcData = state.toolCalls.get(idx)!;
@@ -316,7 +324,7 @@ export function generateEndEvents(state: StreamState): string {
       });
       out += sse("response.output_item.done", {
         type: "response.output_item.done", output_index: idx,
-        item: { type: "function_call", id: `fc_${randomUUID().replace(/-/g, "").slice(0, 24)}`, call_id: tc.id, name: tc.name, arguments: tc.arguments, status: "completed" },
+        item: { type: "function_call", id: tc.fcId, call_id: tc.id, name: tc.name, arguments: tc.arguments, status: "completed" },
       });
     }
   } else {
@@ -334,7 +342,7 @@ export function generateEndEvents(state: StreamState): string {
   const now = Math.floor(Date.now() / 1000);
   const output = state.toolCalls.size > 0
     ? Array.from(state.toolCalls.values()).map((tc) => ({
-        type: "function_call", id: `fc_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+        type: "function_call", id: tc.fcId,
         call_id: tc.id, name: tc.name, arguments: tc.arguments, status: "completed",
       }))
     : [{ type: "message", id: state.itemId, role: "assistant", status: "completed",
@@ -346,7 +354,7 @@ export function generateEndEvents(state: StreamState): string {
     response: {
       id: state.responseId, object: "response", created_at: now, status: "completed",
       model: state.model, output,
-      usage: state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      usage: state.usage || { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     },
   });
   return out;
