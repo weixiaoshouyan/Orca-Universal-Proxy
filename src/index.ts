@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
@@ -176,7 +176,7 @@ app.get("/api/config", (_req, res) => {
   for (const [k, v] of Object.entries(c.providerKeys)) {
     safeKeys[k] = v ? `${v.slice(0, 8)}...` : "";
   }
-  res.json({ ...c, providerKeys: safeKeys, projectDir: process.cwd() });
+  res.json({ ...c, providerKeys: safeKeys });
 });
 
 app.post("/api/config", (req, res) => {
@@ -212,7 +212,7 @@ app.post("/api/config", (req, res) => {
         if (typeof v === "string") {
           if (v === "" || v === "__clear__") {
             delete current.providerKeys[k];
-          } else if (!v.includes("***") && !v.includes("...") && !v.includes("*****") && !v.endsWith("...")) {
+          } else if (!v.includes("***") && !v.includes("...")) {
             current.providerKeys[k] = v;
           }
         }
@@ -2160,7 +2160,7 @@ You have a massive 1,000,000 (1M) token context window memory. You can read, pro
           properties: {
             skillId: {
               type: "string",
-              description: "The skill ID (e.g. folder name under C:\\Users\\台就\\.agents\\skills directory)"
+              description: "The skill ID (e.g. folder name under the skills directory)"
             }
           },
           required: ["skillId"]
@@ -2515,7 +2515,7 @@ const server = app.listen(PORT, HOST, () => {
 // Configure server timeouts to prevent connection termination during long agent runs
 server.timeout = 0;
 server.keepAliveTimeout = 0;
-server.headersTimeout = 0;
+server.headersTimeout = 600000; // 10 min headers timeout
 server.requestTimeout = 0;
 
 // ---- App Management API ----

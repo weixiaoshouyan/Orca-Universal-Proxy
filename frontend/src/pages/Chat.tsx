@@ -51,6 +51,9 @@ export default function Chat({ lang }: { lang: Language }) {
   const [loadingChats, setLoadingChats] = useState<Record<string, boolean>>({});
   const [activeDropdown, setActiveDropdown] = useState<'none' | 'preset' | 'model' | 'quality' | 'readyTools' | 'buildPlan'>('none');
   const abortControllersRef = useRef<Record<string, AbortController>>({});
+  const retryCountRef = useRef<Record<string, number>>({});
+  const MAX_RETRIES = 2;
+  const RETRY_DELAY = 3000;
 
   const handleStop = (chatId?: string) => {
     const id = chatId || activeId;
@@ -246,7 +249,7 @@ export default function Chat({ lang }: { lang: Language }) {
       }
       
       if (wsList.length === 0) {
-        const defaultPath = configRes.data?.projectDir || 'E:\\工作\\SDA配置\\orca';
+        const defaultPath = configRes.data?.projectDir || '';
         const defaultName = defaultPath.split(/[\\/]/).pop() || 'orca';
         const defaultWs = {
           id: 'ws_default',
@@ -512,6 +515,7 @@ export default function Chat({ lang }: { lang: Language }) {
     // Clear input & attachments
     setInput('');
     setAttachedFile(null);
+    retryCountRef.current[chatId] = 0;
     setLoadingChats(prev => ({ ...prev, [chatId]: true }));
 
     // Update conversation state temporarily
@@ -582,19 +586,49 @@ export default function Chat({ lang }: { lang: Language }) {
           console.log('Request aborted by user');
           setLoadingChats(prev => ({ ...prev, [chatId]: false }));
           delete abortControllersRef.current[chatId];
+          delete retryCountRef.current[chatId];
           return;
         }
         console.error(err);
+        const currentRetry = retryCountRef.current[chatId] || 0;
+        if (currentRetry < MAX_RETRIES) {
+          retryCountRef.current[chatId] = currentRetry + 1;
+          const retryNum = currentRetry + 1;
+          const retryMsg = lang === 'en'
+            ? '\n\n[Connection lost. Retrying (' + retryNum + '/' + MAX_RETRIES + ')...]'
+            : '\n\n[连接中断，正在重试 (' + retryNum + '/' + MAX_RETRIES + ')…]';
+          setConversations(prev => {
+            const updated = prev.map(c => {
+              if (c.id === chatId) {
+                const msgs = [...c.messages];
+                if (msgs[assistantIndex]) {
+                  msgs[assistantIndex] = { role: 'assistant', content: msgs[assistantIndex].content + retryMsg, timestamp: msgs[assistantIndex].timestamp || timeStr };
+                }
+                return { ...c, messages: msgs };
+              }
+              return c;
+            });
+            localStorage.setItem('orca_conversations', JSON.stringify(updated));
+            return updated;
+          });
+          delete abortControllersRef.current[chatId];
+          setTimeout(() => {
+            if (retryCountRef.current[chatId] !== undefined) {
+              handleSend();
+            }
+          }, RETRY_DELAY);
+          return;
+        }
+        delete retryCountRef.current[chatId];
+        const errMsg = lang === 'en'
+          ? '\n\n[Error: Failed after retries. Please check network and provider settings.]'
+          : '\n\n[错误: 重试后仍无法获取响应，请检查网络和供应商配置。]';
         setConversations(prev => {
           const updated = prev.map(c => {
             if (c.id === chatId) {
               const msgs = [...c.messages];
               if (msgs[assistantIndex]) {
-                msgs[assistantIndex] = {
-                  role: 'assistant',
-                  content: msgs[assistantIndex].content + '\n\n[Error: Failed to fetch response from proxy]',
-                  timestamp: msgs[assistantIndex].timestamp || timeStr
-                };
+                msgs[assistantIndex] = { role: 'assistant', content: msgs[assistantIndex].content + errMsg, timestamp: msgs[assistantIndex].timestamp || timeStr };
               }
               return { ...c, messages: msgs };
             }

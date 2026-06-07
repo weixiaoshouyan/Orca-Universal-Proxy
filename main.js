@@ -67,6 +67,24 @@ function getTheme() {
   return 'dark';
 }
 
+function checkPortAvailable(port) {
+  return new Promise((resolve) => {
+    const net = require('net');
+    const tester = net.createServer();
+    tester.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+    tester.once('listening', () => {
+      tester.close(() => resolve(true));
+    });
+    tester.listen(port, '127.0.0.1');
+  });
+}
+
 function startServer() {
   return new Promise((resolve, reject) => {
     const bundlePath = path.join(__dirname, 'dist', 'bundle.js');
@@ -394,6 +412,25 @@ function createTray() {
 app.whenReady().then(async () => {
   // Copy data files to userData if needed
   copyDataFiles();
+
+  // Check port availability before starting
+  const portAvailable = await checkPortAvailable(PORT);
+  if (!portAvailable) {
+    const result = await dialog.showMessageBox({
+      type: 'warning',
+      title: '端口被占用 / Port In Use',
+      message: '端口  已被其他程序占用',
+      detail: '端口 ' + PORT + ' 已被占用，Orca 无法启动服务。\n\nPort ' + PORT + ' is already in use. Orca cannot start the server.\n\n请点击确定关闭冲突程序后重试，或修改配置文件中的端口号。',
+      buttons: ['确定 / OK', '打开配置文件 / Open Config'],
+      defaultId: 0
+    });
+    if (result.response === 1) {
+      const configPath = path.join(app.getPath('userData'), 'data', 'config.json');
+      shell.openPath(configPath);
+    }
+    app.quit();
+    return;
+  }
 
   // Start the Express server
   try {
