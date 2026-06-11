@@ -2,12 +2,18 @@
 import path from "path";
 import crypto from "crypto";
 
-interface CacheData {
-  [key: string]: {
-    response: any;
-    timestamp: number;
-  };
+interface CacheEntry {
+  response: any;
+  timestamp: number;
+  lastAccessed: number;
 }
+
+interface CacheData {
+  [key: string]: CacheEntry;
+}
+
+const CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 7 days
+const MAX_ENTRIES = 1000;
 
 let _cache: CacheData = null as any;
 
@@ -16,6 +22,55 @@ const _devDir = path.join(__dirname, "..");
 const _portableDir = __dirname;
 const BASE_DIR = _isElectron ? process.env.ORCA_BASE_DIR! : (fs.existsSync(path.join(_portableDir, "public")) ? _portableDir : _devDir);
 const CACHE_PATH = path.join(BASE_DIR, "data", "cache.json");
+
+function evictExpiredEntries(): number {
+  const now = Date.now();
+  let expired = 0;
+  for (const key of Object.keys(_cache)) {
+    if (now - _cache[key].timestamp > CACHE_TTL) {
+      delete _cache[key];
+      expired++;
+    }
+  }
+  return expired;
+}
+
+function evictLRU(): number {
+  const keys = Object.keys(_cache);
+  if (keys.length <= MAX_ENTRIES) return 0;
+  // Sort by lastAccessed ascending, remove oldest
+  const sorted = keys.sort((a, b) => _cache[a].lastAccessed - _cache[b].lastAccessed);
+  const toRemove = sorted.slice(0, keys.length - MAX_ENTRIES);
+  for (const key of toRemove) {
+    delete _cache[key];
+  }
+  return toRemove.length;
+}
+
+function cleanupCache(): void {
+  const expired = evictExpiredEntries();
+  const evicted = evictLRU();
+  if (expired > 0 || evicted > 0) {
+    console.log(`[Cache] Cleaned up: ${expired} expired, ${evicted} LRU evicted`);
+    saveCache();
+  }
+}
+
+// Upgrade old cache format (no lastAccessed field)
+function upgradeCacheFormat(): void {
+  let changed = false;
+  for (const key of Object.keys(_cache)) {
+    const entry = _cache[key];
+    if (typeof (entry as any).lastAccessed !== "number") {
+      (entry as any).lastAccessed = entry.timestamp || Date.now();
+      changed = true;
+    }
+  }
+  if (changed) {
+    console.log("[Cache] Upgraded cache format with lastAccessed timestamps");
+    saveCache();
+  }
+}
 
 function getCache(): CacheData {
   if (_cache) return _cache;
@@ -28,6 +83,8 @@ function getCache(): CacheData {
   } catch {
     _cache = {};
   }
+  upgradeCacheFormat();
+  cleanupCache();
   return _cache;
 }
 
@@ -76,10 +133,17 @@ export function computeCacheKey(body: any): string {
 
 export function getCachedResponse(key: string): any | null {
   const cache = getCache();
-  if (cache[key]) {
-    return cache[key].response;
+  const entry = cache[key];
+  if (!entry) return null;
+  // Check TTL
+  if (Date.now() - entry.timestamp > CACHE_TTL) {
+    delete cache[key];
+    saveCache();
+    return null;
   }
-  return null;
+  // Update access time for LRU tracking
+  entry.lastAccessed = Date.now();
+  return entry.response;
 }
 
 export function setCachedResponse(key: string, response: any): void {
@@ -87,8 +151,30 @@ export function setCachedResponse(key: string, response: any): void {
   cache[key] = {
     response,
     timestamp: Date.now(),
+    lastAccessed: Date.now(),
   };
+  // Enforce max entries cap (will trigger LRU eviction on next getCache)
+  if (Object.keys(cache).length > MAX_ENTRIES * 1.1) {
+    evictLRU();
+  }
   saveCache();
+}
+
+// Manually purge expired or LRU entries (called from admin API)
+export function purgeCache(): { expired: number; evicted: number } {
+  const expired = evictExpiredEntries();
+  const evicted = evictLRU();
+  saveCache();
+  return { expired, evicted };
+}
+
+// Get cache stats
+export function getCacheStats(): { entries: number; sizeBytes: number } {
+  const cache = getCache();
+  const keys = Object.keys(cache);
+  let sizeBytes = 0;
+  try { sizeBytes = fs.statSync(CACHE_PATH).size; } catch { /* ignore */ }
+  return { entries: keys.length, sizeBytes };
 }
 
 // Simulates a streaming response for cached completions

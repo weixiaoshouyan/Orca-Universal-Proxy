@@ -1,4 +1,4 @@
-﻿import express from "express";
+import express from "express";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import path from "path";
@@ -6,6 +6,14 @@ import fs from "fs";
 import os from "os";
 import dns from "dns";
 
+// EPIPE error resilience
+function isBrokenPipeError(err: any): boolean { return err && err.code === 'EPIPE'; }
+process.stdout.on('error', (err) => { if (!isBrokenPipeError(err)) throw err; });
+process.stderr.on('error', (err) => { if (!isBrokenPipeError(err)) throw err; });
+const _rawLog = console.log.bind(console);
+const _rawErr = console.error.bind(console);
+console.log = (...args: any[]) => { try { _rawLog(...args); } catch (err) { if (!isBrokenPipeError(err)) throw err; } };
+console.error = (...args: any[]) => { try { _rawErr(...args); } catch (err) { if (!isBrokenPipeError(err)) throw err; } };
 dns.setDefaultResultOrder("ipv4first");
 import { execSync, spawn } from "child_process";
 import {
@@ -37,8 +45,11 @@ import {
   resolveModel,
   type RuntimeConfig,
 } from "./providers";
-import { initMCPServers, shutdownMCPServers, getAllMCPTools, executeMCPTool } from "./mcp";
+import { initMCPServers, shutdownMCPServers, getAllMCPTools, executeMCPTool, getMCPServerStatuses } from "./mcp";
 import { computeCacheKey, getCachedResponse, setCachedResponse, replayStreamResponse } from "./cache";
+import { handleAgentToolCall } from "./services/tools";
+import { runSkillScript, executeTerminalCommand, initSkillsDirectory, parseFrontmatter, getSkillsSystemPrompt, SKILLS_DIR } from "./services/skills";
+import { accumulateCost, seedBillingFile } from "./services/billing";
 
 dotenv.config({ path: process.env.ORCA_BASE_DIR ? path.join(process.env.ORCA_BASE_DIR, '.env') : undefined });
 
@@ -52,8 +63,26 @@ const _STATIC_DIR = _isElectron ? path.join(_devDir, "public") : path.join(_BASE
 
 const LOG_DIR = path.join(_BASE_DIR, "data", "logs");
 const LOG_FILE = path.join(LOG_DIR, "orca.log");
+const MAX_LOG_SIZE = 10 * 1024 * 1024;
+const MAX_LOG_BACKUPS = 5;
+function rotateLogIfNeeded(): void {
+  try {
+    if (!fs.existsSync(LOG_FILE)) return;
+    const stat = fs.statSync(LOG_FILE);
+    if (stat.size < MAX_LOG_SIZE) return;
+    for (let i = MAX_LOG_BACKUPS - 1; i >= 1; i--) {
+      const older = path.join(LOG_DIR, `orca.log.${i}`);
+      const newer = path.join(LOG_DIR, `orca.log.${i + 1}`);
+      if (fs.existsSync(older)) { if (fs.existsSync(newer)) fs.unlinkSync(newer); fs.renameSync(older, newer); }
+    }
+    const backup1 = path.join(LOG_DIR, "orca.log.1");
+    if (fs.existsSync(backup1)) fs.unlinkSync(backup1);
+    fs.renameSync(LOG_FILE, backup1);
+  } catch (e) { console.error("Log rotation failed:", e); }
+}
 const BILLING_FILE = path.join(_BASE_DIR, "data", "billing.json");
 try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch (e) { console.error("Failed to create log directory:", e); }
+rotateLogIfNeeded();
 
 const cfg = loadConfig();
 const PORT = cfg.port;
@@ -156,7 +185,14 @@ app.use((req, res, next) => {
 });
 // ---- Management API ----
 
-app.get("/health", (_req, res) => { res.json({ status: "ok", uptime: process.uptime() }); });
+app.get("/health", (_req, res) => {
+  const memUsage = process.memoryUsage();
+  const ms = getMCPServerStatuses();
+  const cs = (() => { try { return require("./cache").getCacheStats(); } catch { return { entries: 0, sizeBytes: 0 }; } })();
+  res.json({ status: "ok", uptime: process.uptime(), pid: process.pid, platform: process.platform, nodeVersion: process.version,
+    memory: { heapUsedMB: Math.round(memUsage.heapUsed / 10485.76) / 100, heapTotalMB: Math.round(memUsage.heapTotal / 10485.76) / 100, rssMB: Math.round(memUsage.rss / 10485.76) / 100 },
+    totalRequests: stats.totalRequests, errors: stats.errors, mcpServers: ms, cache: cs });
+});
 app.get("/api/status", (_req, res) => {
   const active = getActiveProvider();
   res.json({ status: "ok", version: "2.1.0", uptime: process.uptime(),
@@ -663,6 +699,44 @@ ${skillBody}`;
   });
 });
 
+app.post("/api/skills/github-import", async (req, res) => {
+  const { repoUrl } = req.body || {};
+  if (!repoUrl || typeof repoUrl !== "string") return res.status(400).json({ error: "repoUrl is required" });
+  const match = repoUrl.match(/github\.com\/([^\/]+)\/([^\/]+?)(?:\/tree\/([^\/]+)(?:\/(.+))?)?(?:\/)?$/);
+  if (!match) return res.status(400).json({ error: "Invalid GitHub URL. Expected: https://github.com/owner/repo" });
+  const [, owner, repoName, branch, subPath] = match;
+  const ref = branch || "main";
+  try {
+    const apiUrl = subPath ? `https://api.github.com/repos/${owner}/${repoName}/contents/${subPath}?ref=${ref}` : `https://api.github.com/repos/${owner}/${repoName}/contents?ref=${ref}`;
+    log("info", `[Skills] GitHub import: ${owner}/${repoName}${subPath ? "/" + subPath : ""}@${ref}`);
+    const resp = await fetch(apiUrl, { headers: { "User-Agent": "Orca-Proxy/2.1.0", "Accept": "application/vnd.github+json" } });
+    if (!resp.ok) { if (resp.status === 404) return res.status(404).json({ error: "Repo not found or is private." }); if (resp.status === 403) return res.status(403).json({ error: "GitHub rate limit exceeded." }); return res.status(resp.status).json({ error: `GitHub ${resp.status}` }); }
+    const items = await resp.json() as any[];
+    if (!Array.isArray(items)) return res.status(400).json({ error: "Unexpected GitHub API response." });
+    let skillId = repoName.toLowerCase().replace(/[^a-z0-9_-]/g, "_"); if (!skillId) skillId = "github_skill_" + Date.now().toString(36);
+    let targetDir = path.join(SKILLS_DIR, skillId), suffix = 1, finalSkillId = skillId;
+    while (fs.existsSync(targetDir)) { finalSkillId = `${skillId}_${suffix}`; targetDir = path.join(SKILLS_DIR, finalSkillId); suffix++; }
+    fs.mkdirSync(targetDir, { recursive: true });
+    let downloaded = 0; const MAX_FILES = 100;
+    const BIN_EXT = [".exe",".dll",".so",".dylib",".png",".jpg",".jpeg",".gif",".bmp",".ico",".zip",".gz",".tar",".7z",".mp3",".mp4",".avi",".mov",".class",".pyc",".db",".sqlite"];
+    const downloadDir = async (dirItems: any[], _base: string) => {
+      for (const item of dirItems) {
+        if (downloaded >= MAX_FILES) break; if (!item || typeof item !== "object") continue;
+        if (item.type === "file") {
+          const parts = (item.name || "").split("."); const ext = "." + parts[parts.length - 1];
+          if (BIN_EXT.includes(ext.toLowerCase())) continue;
+          try { const fr = await fetch(item.download_url, { headers: { "User-Agent": "Orca-Proxy/2.1.0" } }); if (!fr.ok) continue; const content = await fr.text(); const tp = path.join(targetDir, item.path); const pd = path.dirname(tp); if (!fs.existsSync(pd)) fs.mkdirSync(pd, { recursive: true }); fs.writeFileSync(tp, content, "utf-8"); downloaded++; } catch {}
+        } else if (item.type === "dir" && item.name !== ".git" && item.name !== "node_modules") {
+          try { const sr = await fetch(item.url, { headers: { "User-Agent": "Orca-Proxy/2.1.0", "Accept": "application/vnd.github+json" } }); if (sr.ok) { const si = await sr.json() as any[]; if (Array.isArray(si)) await downloadDir(si, _base); } } catch {}
+        }
+      }
+    };
+    await downloadDir(items, "");
+    log("info", `[Skills] GitHub import: ${downloaded} files from ${owner}/${repoName} => ${finalSkillId}`);
+    res.json({ ok: true, id: finalSkillId, repo: `${owner}/${repoName}`, files: downloaded });
+  } catch (e: any) { log("error", "GitHub import failed:", e); res.status(500).json({ error: e.message || "Unknown error" }); }
+});
+
 app.post("/api/skills", (req, res) => {
   const { id, name, description, instructions } = req.body;
   if (!id || !name) {
@@ -857,659 +931,6 @@ app.post("/v1/messages", async (req, res) => {
   }
 });
 
-// ---- Helpers for Agentic Completions ----
-
-const SKILLS_DIR = path.join(_BASE_DIR, "data", "skills");
-
-function initSkillsDirectory() {
-  try {
-    let srcSkillsDir = process.env.ORCA_SKILLS_SRC_DIR || path.join(_devDir, "skills");
-    if (!fs.existsSync(srcSkillsDir) && _isElectron) {
-      const unpackedDir = __dirname.replace("app.asar", "app.asar.unpacked");
-      srcSkillsDir = path.join(unpackedDir, "..", "skills");
-      if (!fs.existsSync(srcSkillsDir)) {
-        srcSkillsDir = path.join(__dirname, "..", "skills");
-      }
-    }
-    
-    log("info", `[Skills] Calculated srcSkillsDir path: ${srcSkillsDir} (Exists: ${fs.existsSync(srcSkillsDir)})`);
-
-    if (!fs.existsSync(SKILLS_DIR)) {
-      fs.mkdirSync(SKILLS_DIR, { recursive: true });
-    }
-
-    const existing = fs.readdirSync(SKILLS_DIR);
-    if (existing.length === 0 && fs.existsSync(srcSkillsDir)) {
-      log("info", `[Skills] Copying default skills from ${srcSkillsDir} to ${SKILLS_DIR}`);
-
-      const copyFolderRecursiveSync = (from: string, to: string) => {
-        if (!fs.existsSync(to)) fs.mkdirSync(to, { recursive: true });
-        const items = fs.readdirSync(from);
-        for (const item of items) {
-          const srcPath = path.join(from, item);
-          const dstPath = path.join(to, item);
-          const stat = fs.statSync(srcPath);
-          if (stat.isFile()) {
-            fs.copyFileSync(srcPath, dstPath);
-          } else if (stat.isDirectory()) {
-            copyFolderRecursiveSync(srcPath, dstPath);
-          }
-        }
-      };
-
-      copyFolderRecursiveSync(srcSkillsDir, SKILLS_DIR);
-      log("info", "[Skills] Default skills copied successfully.");
-    }
-  } catch (e) {
-    log("error", "Failed to initialize skills directory:", e);
-  }
-}
-
-// Parse YAML frontmatter manually
-function parseFrontmatter(content: string): { name: string; description: string; body: string } {
-  const result = { name: "", description: "", body: content };
-  if (content.startsWith("---")) {
-    const parts = content.split("---");
-    if (parts.length >= 3) {
-      const yaml = parts[1];
-      const lines = yaml.split("\n");
-      for (const line of lines) {
-        if (line.includes(":")) {
-          const idx = line.indexOf(":");
-          const k = line.substring(0, idx).trim();
-          const v = line.substring(idx + 1).trim();
-          if (k === "name") result.name = v.replace(/^['"]|['"]$/g, "");
-          if (k === "description") result.description = v.replace(/^['"]|['"]$/g, "");
-        }
-      }
-      result.body = parts.slice(2).join("---").trim();
-    }
-  }
-  return result;
-}
-
-function getSkillsSystemPrompt(): string {
-  return `\n[Agent Skills System]
-You have access to a repository of specialized automation skills (e.g., document automation, scraping, media generation) located at '${SKILLS_DIR}'.
-To use these skills:
-1. If you need to search for specialized tools/scripts, call \`list_available_skills\` to see the list of skill IDs and descriptions.
-2. Call \`get_skill_details\` with a specific skillId to read its detailed instructions, guidelines, and available scripts.
-3. Call \`run_skill_script\` to execute a script from that skill with required arguments.
-Do NOT try to guess script names or skill details without checking them first via the tools.`;
-}
-
-
-function runSkillScript(skillId: string, scriptName: string, args: string[], workspacePath?: string): Promise<string> {
-  return new Promise((resolve) => {
-    const skillPath = path.join(SKILLS_DIR, skillId);
-    const scriptPath = path.join(skillPath, "scripts", scriptName);
-    if (!fs.existsSync(scriptPath)) {
-      return resolve(`Error: Script not found at ${scriptPath}`);
-    }
-    const ext = path.extname(scriptName).toLowerCase();
-    let cmd = "node";
-    let runArgs = [scriptPath, ...(args || [])];
-    if (ext === ".py") {
-      cmd = "python";
-    }
-    const isWindows = process.platform === "win32";
-    const child = spawn(cmd, runArgs, {
-      shell: isWindows,
-      env: { ...process.env, WORKSPACE_PATH: workspacePath || "", PROJECT_DIR: workspacePath || "" }
-    });
-    let stdout = "";
-    let stderr = "";
-    const MAX_BUFFER = 100 * 1024;
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
-
-    child.stdout.on("data", (d) => {
-      const chunk = d.toString();
-      if (stdout.length + chunk.length > MAX_BUFFER) {
-        if (!stdoutTruncated) {
-          stdout += chunk.substring(0, MAX_BUFFER - stdout.length) + "\n[Stdout truncated: exceeded 100KB limit...]";
-          stdoutTruncated = true;
-        }
-      } else if (!stdoutTruncated) {
-        stdout += chunk;
-      }
-    });
-
-    child.stderr.on("data", (d) => {
-      const chunk = d.toString();
-      if (stderr.length + chunk.length > MAX_BUFFER) {
-        if (!stderrTruncated) {
-          stderr += chunk.substring(0, MAX_BUFFER - stderr.length) + "\n[Stderr truncated: exceeded 100KB limit...]";
-          stderrTruncated = true;
-        }
-      } else if (!stderrTruncated) {
-        stderr += chunk;
-      }
-    });
-
-    child.on("close", (code) => {
-      resolve(`[Exit Code ${code}]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
-    });
-    child.on("error", (err) => {
-      resolve(`[Execution Error]:\n${err.message}`);
-    });
-  });
-}
-
-function executeTerminalCommand(command: string, workspacePath: string): Promise<string> {
-  return new Promise((resolve) => {
-    const isWindows = process.platform === "win32";
-    const cmd = isWindows ? "powershell" : "bash";
-    const runArgs = isWindows ? ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command] : ["-c", command];
-
-    const child = spawn(cmd, runArgs, {
-      cwd: workspacePath,
-      shell: isWindows,
-      env: { ...process.env }
-    });
-
-    let stdout = "";
-    let stderr = "";
-    const MAX_BUFFER = 100 * 1024;
-    let stdoutTruncated = false;
-    let stderrTruncated = false;
-
-    child.stdout.on("data", (d) => {
-      const chunk = d.toString();
-      if (stdout.length + chunk.length > MAX_BUFFER) {
-        if (!stdoutTruncated) {
-          stdout += chunk.substring(0, MAX_BUFFER - stdout.length) + "\n[Stdout truncated: exceeded 100KB limit...]";
-          stdoutTruncated = true;
-        }
-      } else if (!stdoutTruncated) {
-        stdout += chunk;
-      }
-    });
-
-    child.stderr.on("data", (d) => {
-      const chunk = d.toString();
-      if (stderr.length + chunk.length > MAX_BUFFER) {
-        if (!stderrTruncated) {
-          stderr += chunk.substring(0, MAX_BUFFER - stderr.length) + "\n[Stderr truncated: exceeded 100KB limit...]";
-          stderrTruncated = true;
-        }
-      } else if (!stderrTruncated) {
-        stderr += chunk;
-      }
-    });
-
-    // Auto-timeout after 30 seconds
-    const timeout = setTimeout(() => {
-      child.kill();
-      resolve(`[Command Timeout after 30s]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
-    }, 30000);
-
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      resolve(`[Exit Code ${code}]\n[Stdout]:\n${stdout}\n[Stderr]:\n${stderr}`);
-    });
-
-    child.on("error", (err) => {
-      clearTimeout(timeout);
-      resolve(`[Execution Error]:\n${err.message}`);
-    });
-  });
-}
-
-function getModelPricing(model: string): { inputPrice: number; outputPrice: number } {
-  const cfg = loadConfig();
-  const pricing = cfg.modelPricing || {};
-  return pricing[model] || { inputPrice: 0.0, outputPrice: 0.0 };
-}
-
-function logDailyBilling(model: string, total: number, cached: number, uncached: number) {
-  try {
-    const today = new Date().toISOString().split("T")[0];
-    const currentMonthStr = today.slice(0, 7); // e.g. "2026-06"
-    let data: Record<string, Record<string, any>> = {};
-    if (fs.existsSync(BILLING_FILE)) {
-      data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
-    }
-
-    // 跨月自动重置检查：只保留当前月份的数据，清理旧月份数据
-    let hasOldMonthData = false;
-    const filteredData: Record<string, any> = {};
-    for (const [dateStr, dayData] of Object.entries(data)) {
-      if (dateStr.startsWith(currentMonthStr)) {
-        filteredData[dateStr] = dayData;
-      } else {
-        hasOldMonthData = true;
-      }
-    }
-    if (hasOldMonthData) {
-      log("info", `[Billing] Auto-resetting billing stats: found data from a different month. Only keeping ${currentMonthStr}`);
-      data = filteredData;
-    }
-
-    if (!data[today]) {
-      data[today] = {};
-    }
-
-    const current = data[today][model];
-    if (current && typeof current === "object") {
-      data[today][model] = {
-        total: (current.total || 0) + total,
-        cached: (current.cached || 0) + cached,
-        uncached: (current.uncached || 0) + uncached,
-      };
-    } else if (typeof current === "number") {
-      // 兼容并平滑升级老数据格式
-      data[today][model] = {
-        total: current + total,
-        cached: cached,
-        uncached: uncached,
-      };
-    } else {
-      data[today][model] = {
-        total,
-        cached,
-        uncached,
-      };
-    }
-
-    fs.writeFileSync(BILLING_FILE, JSON.stringify(data, null, 2), "utf-8");
-  } catch (e) {
-    log("error", "Failed to save daily billing stats:", e);
-  }
-}
-
-function seedBillingFile() {
-  const needsReSeed = !fs.existsSync(BILLING_FILE);
-  const currentMonthStr = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
-  if (needsReSeed) {
-    try {
-      const parentDir = path.dirname(BILLING_FILE);
-      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true });
-      fs.writeFileSync(BILLING_FILE, JSON.stringify({}, null, 2), "utf-8");
-      stats.totalTokens = 0;
-      stats.totalCost = 0;
-    } catch (e) { log("error", "Failed to seed billing file:", e); }
-  } else {
-    try {
-      let data = JSON.parse(fs.readFileSync(BILLING_FILE, "utf-8"));
-      
-      // 跨月自动重置检查：若含有非当前月数据，则自动清理重置只保留当月
-      let hasOldMonthData = false;
-      const filteredData: Record<string, any> = {};
-      for (const [dateStr, dayData] of Object.entries(data)) {
-        if (dateStr.startsWith(currentMonthStr)) {
-          filteredData[dateStr] = dayData;
-        } else {
-          hasOldMonthData = true;
-        }
-      }
-      if (hasOldMonthData) {
-        log("info", `[Billing] Auto-resetting billing stats on startup: clearing records older than ${currentMonthStr}`);
-        data = filteredData;
-        fs.writeFileSync(BILLING_FILE, JSON.stringify(data, null, 2), "utf-8");
-      }
-
-      let total = 0;
-      let totalCost = 0;
-      for (const [_, dayData] of Object.entries(data)) {
-        for (const [model, val] of Object.entries(dayData as Record<string, any>)) {
-          const price = getModelPricing(model);
-          if (typeof val === "number") {
-            total += val;
-            totalCost += (val * price.inputPrice) / 1000000;
-          } else if (val && typeof val === "object") {
-            total += (val.total || 0);
-            const uncached = val.uncached || 0;
-            const cached = val.cached || 0;
-            totalCost += ((uncached * price.inputPrice) + (cached * price.inputPrice * 0.5)) / 1000000;
-          }
-        }
-      }
-      stats.totalTokens = total;
-      stats.totalCost = totalCost;
-    } catch (e) { log("error", "Failed to load billing stats:", e); }
-  }
-}
-
-function accumulateCost(model: string, promptTokens: number, completionTokens: number, cachedTokens: number = 0) {
-  const price = getModelPricing(model);
-  const uncachedTokens = Math.max(0, promptTokens - cachedTokens);
-  const cost = ((uncachedTokens * price.inputPrice) + (cachedTokens * price.inputPrice * 0.5) + (completionTokens * price.outputPrice)) / 1000000;
-  const total = promptTokens + completionTokens;
-  stats.totalTokens += total;
-  if (!stats.totalCost) stats.totalCost = 0;
-  stats.totalCost += cost;
-  log("info", `[Billing] Model: ${model}, Prompt: ${promptTokens} (Cached: ${cachedTokens}), Completion: ${completionTokens}, Cost: $${cost.toFixed(6)}, Cumulative Cost: $${stats.totalCost.toFixed(4)}`);
-  logDailyBilling(model, total, cachedTokens, uncachedTokens + completionTokens);
-}
-
-async function handleAgentToolCall(tc: any, workspacePath: string): Promise<string> {
-  const toolName = tc.function.name;
-  let args: any = {};
-  try {
-    args = JSON.parse(tc.function.arguments || "{}");
-  } catch (e: any) {
-    return `Error: Failed to parse arguments: ${e.message}`;
-  }
-
-  if (toolName === "run_skill_script") {
-    try {
-      return await runSkillScript(args.skillId, args.scriptName, args.arguments, workspacePath);
-    } catch (e: any) {
-      return `Error running script: ${e.message}`;
-    }
-  }
-
-  if (toolName === "run_terminal_command") {
-    const cwdPath = (workspacePath && fs.existsSync(workspacePath)) ? workspacePath : process.cwd();
-    try {
-      return await executeTerminalCommand(args.command, cwdPath);
-    } catch (e: any) {
-      return `Error executing command: ${e.message}`;
-    }
-  }
-
-  if (toolName === "list_workspace_files") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected in the UI. Please ask the user to select a workspace directory.";
-    }
-    try {
-      const walk = (dir: string, depth = 0): string[] => {
-        if (depth > 3) return [];
-        let results: string[] = [];
-        const list = fs.readdirSync(dir, { withFileTypes: true });
-        for (const item of list) {
-          const resPath = path.join(dir, item.name);
-          const relPath = path.relative(workspacePath, resPath);
-          if (item.isDirectory()) {
-            if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
-            results.push(relPath + "/");
-            results.push(...walk(resPath, depth + 1));
-          } else {
-            results.push(relPath);
-          }
-        }
-        return results;
-      };
-      const files = walk(workspacePath);
-      if (files.length === 0) return "Workspace directory is empty.";
-      const fileListStr = files.map(f => `- ${f}`).join("\n");
-      const limit = 100 * 1024;
-      if (fileListStr.length > limit) {
-        return `Workspace files in ${workspacePath} (Truncated):\n${fileListStr.substring(0, limit)}\n... [List truncated. Too many files inside workspace directory.]`;
-      }
-      return `Workspace files in ${workspacePath}:\n${fileListStr}`;
-    } catch (e: any) {
-      return `Error listing files: ${e.message}`;
-    }
-  }
-
-  if (toolName === "read_workspace_file") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected.";
-    }
-    try {
-      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      const realWorkspacePath = fs.realpathSync(workspacePath);
-      const realFullPath = fs.existsSync(fullPath) ? fs.realpathSync(fullPath) : fullPath;
-      if (!realFullPath.startsWith(realWorkspacePath)) {
-        return "Error: Path traversal violation. Access denied.";
-      }
-      if (!fs.existsSync(fullPath)) {
-        return `Error: File not found at ${args.relativeFilePath}`;
-      }
-      const stat = fs.statSync(fullPath);
-      if (!stat.isFile()) {
-        return `Error: Target ${args.relativeFilePath} is not a file.`;
-      }
-      const content = fs.readFileSync(fullPath, "utf-8");
-      const limit = 1024 * 1024; // 1MB limit for safety to prevent V8 freeze or LLM timeouts
-      if (content.length > limit) {
-        return content.substring(0, limit) + "\n\n[File content truncated. Only the first 1MB is shown to prevent request timeout and V8 heap block...]";
-      }
-      return content;
-    } catch (e: any) {
-      return `Error reading file: ${e.message}`;
-    }
-  }
-
-  if (toolName === "write_workspace_file") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected.";
-    }
-    try {
-      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      const realWorkspacePath = fs.realpathSync(workspacePath);
-      // For write operations, we check the parent directory since the file may not exist yet
-      const parentDir = path.dirname(fullPath);
-      const realParentDir = fs.existsSync(parentDir) ? fs.realpathSync(parentDir) : parentDir;
-      if (!realParentDir.startsWith(realWorkspacePath)) {
-        return "Error: Path traversal violation. Access denied.";
-      }
-      if (!fs.existsSync(parentDir)) {
-        fs.mkdirSync(parentDir, { recursive: true });
-      }
-      fs.writeFileSync(fullPath, args.content || "", "utf-8");
-      return `Success: File written successfully to ${args.relativeFilePath}`;
-    } catch (e: any) {
-      return `Error writing file: ${e.message}`;
-    }
-  }
-
-  if (toolName === "patch_workspace_file") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected.";
-    }
-    try {
-      const fullPath = path.resolve(workspacePath, args.relativeFilePath);
-      const realWorkspacePath = fs.realpathSync(workspacePath);
-      const realFullPath = fs.existsSync(fullPath) ? fs.realpathSync(fullPath) : fullPath;
-      if (!realFullPath.startsWith(realWorkspacePath)) {
-        return "Error: Path traversal violation. Access denied.";
-      }
-      if (!fs.existsSync(fullPath)) {
-        return `Error: File not found at ${args.relativeFilePath}`;
-      }
-      const stat = fs.statSync(fullPath);
-      if (!stat.isFile()) {
-        return `Error: Target ${args.relativeFilePath} is not a file.`;
-      }
-      const content = fs.readFileSync(fullPath, "utf-8");
-      const searchContent = args.searchContent;
-      const replacementContent = args.replacementContent;
-
-      if (!searchContent) {
-        return "Error: searchContent parameter is empty.";
-      }
-
-      const occurrences = content.split(searchContent).length - 1;
-      if (occurrences === 0) {
-        return `Error: The searchContent was not found in the file. Please ensure the spacing, indentation, and newlines match the file content exactly. File contents around relevant code block should be verified.`;
-      }
-      if (occurrences > 1) {
-        return `Error: The searchContent was found ${occurrences} times in the file. To avoid incorrect replacements, please provide a unique searchContent block with more surrounding context lines (e.g. adjacent lines of code).`;
-      }
-
-      const newContent = content.replace(searchContent, replacementContent);
-      fs.writeFileSync(fullPath, newContent, "utf-8");
-      return `Success: File ${args.relativeFilePath} patched successfully.`;
-    } catch (e: any) {
-      return `Error patching file: ${e.message}`;
-    }
-  }
-
-  if (toolName === "search_grep") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected.";
-    }
-    try {
-      const query = args.query;
-      const filePattern = args.filePattern;
-      if (!query) return "Error: query parameter is required.";
-      
-      const results: string[] = [];
-      const queryLower = query.toLowerCase();
-      let patternRegex: RegExp | null = null;
-      if (filePattern) {
-        const cleanPattern = filePattern
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*/g, '.*')
-          .replace(/\?/g, '.');
-        patternRegex = new RegExp(`^${cleanPattern}$`, 'i');
-      }
-
-      const searchDir = (dir: string) => {
-        if (results.length > 50) return;
-        try {
-          const list = fs.readdirSync(dir, { withFileTypes: true });
-          for (const item of list) {
-            const resPath = path.join(dir, item.name);
-            const relPath = path.relative(workspacePath, resPath).replace(/\\/g, '/');
-            if (item.isDirectory()) {
-              if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
-              searchDir(resPath);
-            } else {
-              if (patternRegex && !patternRegex.test(item.name) && !patternRegex.test(relPath)) {
-                continue;
-              }
-              const stat = fs.statSync(resPath);
-              if (stat.size > 2 * 1024 * 1024) continue; // ignore files > 2MB
-              const content = fs.readFileSync(resPath, "utf-8");
-              if (content.toLowerCase().includes(queryLower)) {
-                const lines = content.split("\n");
-                lines.forEach((line, idx) => {
-                  if (line.toLowerCase().includes(queryLower)) {
-                    results.push(`${relPath}:${idx + 1}: ${line.trim()}`);
-                  }
-                });
-              }
-            }
-          }
-        } catch (e) { log("error", "Error searching directory:", e); }
-      };
-
-      searchDir(workspacePath);
-      if (results.length === 0) return `No matches found for query: "${query}"`;
-      const limit = 50;
-      const sliced = results.slice(0, limit);
-      const truncatedText = results.length > limit ? `\n... [Truncated: showing first ${limit} matches out of ${results.length} total matches.]` : '';
-      return `Search Results for query: "${query}":\n\n${sliced.join("\n")}${truncatedText}`;
-    } catch (e: any) {
-      return `Error in search_grep: ${e.message}`;
-    }
-  }
-
-  if (toolName === "glob_files") {
-    if (!workspacePath || !fs.existsSync(workspacePath)) {
-      return "Error: No active workspace directory selected.";
-    }
-    try {
-      const pattern = args.pattern;
-      if (!pattern) return "Error: pattern parameter is required.";
-      const matchedFiles: string[] = [];
-      let cleanPattern = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-      cleanPattern = cleanPattern.replace(/\*\*/g, '@@ANY@@');
-      cleanPattern = cleanPattern.replace(/\*/g, '[^/]*');
-      cleanPattern = cleanPattern.replace(/@@ANY@@/g, '.*');
-      const regex = new RegExp(`^${cleanPattern}$`, 'i');
-
-      const walk = (dir: string) => {
-        if (matchedFiles.length > 200) return;
-        try {
-          const list = fs.readdirSync(dir, { withFileTypes: true });
-          for (const item of list) {
-            const resPath = path.join(dir, item.name);
-            const relPath = path.relative(workspacePath, resPath).replace(/\\/g, '/');
-            if (item.isDirectory()) {
-              if (item.name === "node_modules" || item.name === ".git" || item.name === "dist") continue;
-              walk(resPath);
-            } else {
-              if (regex.test(relPath) || regex.test(item.name)) {
-                matchedFiles.push(relPath);
-              }
-            }
-          }
-        } catch (e) { log("error", "Error walking directory:", e); }
-      };
-
-      walk(workspacePath);
-      if (matchedFiles.length === 0) return `No files matched the pattern: "${pattern}"`;
-      const resultStr = matchedFiles.map(f => `- ${f}`).join("\n");
-      const limit = 200;
-      const truncatedText = matchedFiles.length > limit ? `\n... [List truncated. Too many matched files.]` : '';
-      return `Matched files for pattern "${pattern}":\n\n${resultStr.substring(0, 100 * 1024)}${truncatedText}`;
-    } catch (e: any) {
-      return `Error in glob_files: ${e.message}`;
-    }
-  }
-
-  if (toolName === "list_available_skills") {
-    try {
-      if (!fs.existsSync(SKILLS_DIR)) {
-        return `Error: Skills folder not found at ${SKILLS_DIR}`;
-      }
-      const dirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true });
-      const skillDirs = dirs.filter(d => d.isDirectory());
-      const list: string[] = [];
-      for (const d of skillDirs) {
-        const skillPath = path.join(SKILLS_DIR, d.name);
-        const mdFile = path.join(skillPath, "SKILL.md");
-        let name = d.name;
-        let desc = "No description available.";
-        if (fs.existsSync(mdFile)) {
-          const text = fs.readFileSync(mdFile, "utf-8");
-          const fm = parseFrontmatter(text);
-          if (fm.name) name = fm.name;
-          if (fm.description) desc = fm.description;
-        }
-        list.push(`- skillId: "${d.name}"\n  name: "${name}"\n  description: "${desc}"`);
-      }
-      return `Available agent skills in ${SKILLS_DIR}:\n\n${list.join("\n\n")}`;
-    } catch (e: any) {
-      return `Error listing skills: ${e.message}`;
-    }
-  }
-
-  if (toolName === "get_skill_details") {
-    try {
-      const skillId = args.skillId;
-      const skillPath = path.join(SKILLS_DIR, skillId);
-      if (!fs.existsSync(skillPath)) {
-        return `Error: Skill "${skillId}" not found.`;
-      }
-      const mdFile = path.join(skillPath, "SKILL.md");
-      let documentation = "No SKILL.md documentation found.";
-      if (fs.existsSync(mdFile)) {
-        documentation = fs.readFileSync(mdFile, "utf-8");
-      }
-      let scriptsList: string[] = [];
-      const scriptsDir = path.join(skillPath, "scripts");
-      if (fs.existsSync(scriptsDir) && fs.statSync(scriptsDir).isDirectory()) {
-        const files = fs.readdirSync(scriptsDir);
-        scriptsList = files.filter(f => f.endsWith(".py") || f.endsWith(".js") || f.endsWith(".ps1") || f.endsWith(".sh"));
-      }
-      return `Skill Details for "${skillId}":\n\n[Documentation (SKILL.md)]:\n${documentation}\n\n[Executable scripts in scripts/ folder]:\n${scriptsList.length > 0 ? scriptsList.map(s => `- ${s}`).join("\n") : "None"}`;
-    } catch (e: any) {
-      return `Error loading skill details: ${e.message}`;
-    }
-  }
-
-  if (toolName.startsWith("mcp__")) {
-    const parts = toolName.split("__");
-    if (parts.length >= 3) {
-      const serverName = parts[1];
-      const actualToolName = parts.slice(2).join("__");
-      try {
-        const result = await executeMCPTool(serverName, actualToolName, args);
-        return JSON.stringify(result);
-      } catch (e: any) {
-        return `Error executing MCP tool: ${e.message}`;
-      }
-    }
-  }
-
-  return `Error: Unknown tool: ${toolName}`;
-}
 
 async function executeAgentCompletions(
   req: any,
@@ -1547,12 +968,11 @@ async function executeAgentCompletions(
     }
   }
 
-  let clientDisconnected = false;
-  res.on("close", () => {
-    if (!res.writableEnded) {
-      clientDisconnected = true;
-    }
-  });
+  if (!(res as any).__orca_closeListenersAdded) {
+    (res as any).__orca_closeListenersAdded = true;
+    res.on("close", () => { (res as any).__orca_clientDisconnected = true; });
+  }
+  function isClientGone(): boolean { return !!(res as any).__orca_clientDisconnected || res.destroyed; }
 
   // Build the request parameters. If defaultMaxTokens is 0, omit it.
   let tempMaxTokens = body.max_tokens ?? loadConfig().defaultMaxTokens;
@@ -1658,14 +1078,37 @@ async function executeAgentCompletions(
     const reader = (upstreamResp.body as any).getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let retryCount = 0;
+    const MAX_STREAM_RETRIES = 3;
 
     while (true) {
-      if (clientDisconnected) {
+      if (isClientGone()) {
         log("info", "[Chat] Response connection closed by client. Aborting stream reader loop.");
         break;
       }
-      const { done, value } = await reader.read();
+      
+      let done = false;
+      let value: any = null;
+      
+      try {
+        const result = await reader.read();
+        done = result.done;
+        value = result.value;
+        retryCount = 0; // Reset retry count on successful read
+      } catch (readError) {
+        log("warn", "[Chat] Stream read error:", readError);
+        retryCount++;
+        if (retryCount >= MAX_STREAM_RETRIES) {
+          log("error", "[Chat] Max stream retries reached, aborting");
+          break;
+        }
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+      
       if (done) break;
+      
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
@@ -1751,7 +1194,7 @@ async function executeAgentCompletions(
       }
     }
 
-    if (clientDisconnected) {
+    if (isClientGone()) {
       try {
         await reader.cancel();
       } catch (e) { log("warn", "Failed to cancel stream reader:", e); }
@@ -1792,7 +1235,7 @@ async function executeAgentCompletions(
 
       let tcIdx = 0;
       for (const tc of toolCalls) {
-        if (clientDisconnected) {
+        if (isClientGone()) {
           log("info", "[Chat] Response connection closed by client. Aborting tool execution loop.");
           break;
         }
@@ -1824,7 +1267,7 @@ async function executeAgentCompletions(
         tcIdx++;
       }
 
-      if (clientDisconnected) {
+      if (isClientGone()) {
         log("info", "[Chat] Response connection closed by client. Aborting agent execution loop recursion.");
         if (!res.writableEnded) res.end();
         return;
@@ -2387,6 +1830,47 @@ app.get("/api/discover-models/:providerId", async (req, res) => {
   } catch (e) {
     res.status(502).json({ error: String(e) });
   }
+});
+
+// SSE streaming: discover models from ALL enabled providers with progress
+app.get("/api/discover-all", async (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  const providers = getAllProviders();
+  const toDiscover = providers.filter((p) => { if (p.id === "custom") return false; return !!getApiKey(p.id); });
+  const send = (event: string, data: any) => { if (res.writableEnded) return; try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch { } };
+  send("init", { total: toDiscover.length, providers: toDiscover.map((p) => p.id) });
+  const results: any[] = [];
+  for (const provider of toDiscover) {
+    send("progress", { provider: provider.id, status: "fetching", completed: results.length, total: toDiscover.length });
+    const apiKey = getApiKey(provider.id);
+    try {
+      const targetUrl = provider.baseUrl + "/v1/models";
+      const headers: Record<string, string> = {};
+      if (provider.id === "anthropic") { if (apiKey) { headers["x-api-key"] = apiKey; headers["anthropic-version"] = "2023-06-01"; } }
+      else { if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`; }
+      const resp = await fetch(targetUrl, { headers, signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) { results.push({ provider: provider.id, models: [], error: `HTTP ${resp.status}` }); send("result", { provider: provider.id, models: [], error: `HTTP ${resp.status}` }); continue; }
+      const data = await resp.json() as any; let rawModels: any[] = [];
+      if (Array.isArray(data)) rawModels = data;
+      else if (data && Array.isArray(data.data)) rawModels = data.data;
+      else if (data && Array.isArray(data.models)) rawModels = data.models;
+      else if (data && typeof data === "object") { for (const val of Object.values(data)) { if (Array.isArray(val)) { rawModels = val; break; } } }
+      const models = rawModels.map((m: any) => { if (typeof m === "string") return { id: m, name: m }; return { id: m.id || m.name || String(m), name: m.display_name || m.name || m.id || String(m) }; });
+      results.push({ provider: provider.id, models }); send("result", { provider: provider.id, models, count: models.length });
+    } catch (e: any) { results.push({ provider: provider.id, models: [], error: e.message }); send("result", { provider: provider.id, models: [], error: e.message }); }
+  }
+  send("done", { total_providers: toDiscover.length, results });
+  if (!res.writableEnded) res.end();
+});
+app.post("/api/discover-sync", (req, res) => {
+  const { providers: providerModels } = req.body || {};
+  if (!Array.isArray(providerModels)) return res.status(400).json({ error: "providers array required" });
+  const current = loadConfig(); let updated = 0;
+  for (const entry of providerModels) { const pcfg = (current as any).providers?.[entry.provider]; if (pcfg && Array.isArray(entry.models)) { pcfg.models = entry.models.map((m: any) => (typeof m === "string" ? { id: m, name: m } : { id: m.id || m, name: m.name || m.id || m })); updated++; } }
+  saveConfig(current); res.json({ ok: true, updated });
 });
 
 app.get("/v1/models", (_req, res) => {

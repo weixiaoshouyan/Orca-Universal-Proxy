@@ -419,7 +419,7 @@ app.whenReady().then(async () => {
     const result = await dialog.showMessageBox({
       type: 'warning',
       title: '端口被占用 / Port In Use',
-      message: '端口  已被其他程序占用',
+      message: '端口 ' + PORT + ' 已被其他程序占用',
       detail: '端口 ' + PORT + ' 已被占用，Orca 无法启动服务。\n\nPort ' + PORT + ' is already in use. Orca cannot start the server.\n\n请点击确定关闭冲突程序后重试，或修改配置文件中的端口号。',
       buttons: ['确定 / OK', '打开配置文件 / Open Config'],
       defaultId: 0

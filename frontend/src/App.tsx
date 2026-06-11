@@ -193,20 +193,39 @@ class ErrorBoundary extends React.Component<
   static getDerivedStateFromError(error: Error) {
     return { hasError: true, error };
   }
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[ErrorBoundary] Uncaught render error:', error, errorInfo);
+  }
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: 40, fontFamily: 'sans-serif', color: '#f87171', background: '#0b0d14', minHeight: '100vh' }}>
-          <h2 style={{ fontSize: 20, marginBottom: 12 }}>Application Error</h2>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 13, color: '#94a3b8', background: '#1e1e2e', padding: 16, borderRadius: 8 }}>
-            {this.state.error?.message || 'Unknown error'}
-          </pre>
-          <button
-            onClick={() => { this.setState({ hasError: false, error: null }); window.location.hash = '#/'; window.location.reload(); }}
-            style={{ marginTop: 16, padding: '8px 20px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
-          >
-            Reload Application
-          </button>
+        <div style={{
+          padding: 40, fontFamily: 'system-ui, sans-serif',
+          color: 'var(--color-error)',
+          background: 'var(--color-bg-base)',
+          minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center'
+        }}>
+          <div style={{ maxWidth: 500, textAlign: 'center' }}>
+            <h2 style={{ fontSize: 24, marginBottom: 8, fontWeight: 700, color: 'var(--color-text-primary)' }}>Application Error</h2>
+            <p style={{ fontSize: 14, color: 'var(--color-text-secondary)', marginBottom: 20 }}>
+              An unexpected error occurred. Your data is safe — try reloading.
+            </p>
+            <pre style={{
+              whiteSpace: 'pre-wrap', fontSize: 12, textAlign: 'left',
+              color: 'var(--color-text-secondary)',
+              background: 'var(--color-bg-card)',
+              padding: 16, borderRadius: 12, marginBottom: 20, maxHeight: 200, overflow: 'auto',
+              border: '1px solid var(--color-border-base)',
+            }}>
+              {this.state.error?.message || 'Unknown error'}
+            </pre>
+            <button
+              onClick={() => { this.setState({ hasError: false, error: null }); window.location.hash = '#/'; window.location.reload(); }}
+              style={{ padding: '10px 28px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 10, cursor: 'pointer', fontSize: 14, fontWeight: 600 }}
+            >
+              Reload Application
+            </button>
+          </div>
         </div>
       );
     }

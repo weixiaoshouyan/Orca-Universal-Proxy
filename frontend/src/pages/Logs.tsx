@@ -33,7 +33,7 @@ export default function Logs({ lang }: LogsProps) {
     fetchLogs();
     let interval: any;
     if (autoRefresh) {
-      interval = setInterval(fetchLogs, 3000);
+      interval = setInterval(fetchLogs, 5000); // Refresh every 5 seconds instead of 3
     }
     return () => clearInterval(interval);
   }, [autoRefresh]);

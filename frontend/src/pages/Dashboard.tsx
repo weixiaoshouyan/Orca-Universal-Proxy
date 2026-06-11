@@ -5,6 +5,19 @@ import { translate as t } from '../i18n';
 import type { Language } from '../i18n';
 import * as echarts from 'echarts';
 
+/** Read theme-aware CSS variable values from the root element */
+function readThemeColors(): Record<string, string> {
+  const s = getComputedStyle(document.documentElement);
+  return {
+    textPrimary: s.getPropertyValue('--color-text-primary').trim() || '#0f172a',
+    textSecondary: s.getPropertyValue('--color-text-secondary').trim() || '#475569',
+    bgCard: s.getPropertyValue('--color-bg-card').trim() || '#ffffff',
+    bgHover: s.getPropertyValue('--color-bg-hover').trim() || '#e2e8f0',
+    border: s.getPropertyValue('--color-border-base').trim() || '#e2e8f0',
+    bgSidebar: s.getPropertyValue('--color-bg-sidebar').trim() || '#f1f5f9',
+  };
+}
+
 const getTokenValue = (val: any): number => {
   if (typeof val === 'number') return val;
   if (val && typeof val === 'object') return val.total || 0;
@@ -238,8 +251,7 @@ export default function Dashboard({ lang }: DashboardProps) {
   }, []);
 
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains('dark');
-    const textColor = isDark ? '#94a3b8' : '#475569';
+    const c = readThemeColors();
 
     let myChart: echarts.ECharts | undefined;
     let handleResize: (() => void) | undefined;
@@ -252,8 +264,8 @@ export default function Dashboard({ lang }: DashboardProps) {
         }
 
         if (viewType === 'chart') {
-          const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-          const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+          const gridBorderColor = c.bgHover;
+          const splitLineColor = c.bgHover;
           
           // Build series data
           const lineSeriesList = modelsList.map((model, idx) => {
@@ -345,17 +357,17 @@ export default function Dashboard({ lang }: DashboardProps) {
               axisPointer: {
                 type: 'shadow'
               },
-              backgroundColor: isDark ? '#151824' : '#ffffff',
-              borderColor: isDark ? '#1f2333' : '#e2e8f0',
+              backgroundColor: c.bgCard,
+              borderColor: c.border,
               borderWidth: 1,
               textStyle: {
-                color: isDark ? '#f8fafc' : '#0f172a',
+                color: c.textPrimary,
                 fontFamily: 'system-ui',
                 fontSize: 12
               },
               formatter: (params: any) => {
                 let date = params[0].axisValue;
-                let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${date}</div>`;
+                let tooltipHtml = `<div style="font-weight: 700; margin-bottom: 8px; font-size: 13px; color: ${c.textPrimary};">${date}</div>`;
                 
                 const lineItem = params.find((p: any) => p.seriesName === 'Token 总消耗');
                 const barItems = params.filter((p: any) => p.seriesName !== 'Token 总消耗');
@@ -371,11 +383,11 @@ export default function Dashboard({ lang }: DashboardProps) {
                   const color = item.color;
                   tooltipHtml += `
                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-top: 4px; font-size: 12px;">
-                      <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                      <span style="display: flex; align-items: center; gap: 6px; color: ${c.textSecondary};">
                         <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${color};"></span>
                         ${item.seriesName}
                       </span>
-                      <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${val.toLocaleString()}</span>
+                      <span style="font-weight: 700; color: ${c.textPrimary}; font-family: monospace;">${val.toLocaleString()}</span>
                     </div>
                   `;
                 });
@@ -388,7 +400,7 @@ export default function Dashboard({ lang }: DashboardProps) {
               top: '2%',
               left: 'center',
               textStyle: {
-                color: textColor,
+                color: c.textPrimary,
                 fontSize: 11,
                 fontFamily: 'system-ui'
               },
@@ -410,7 +422,7 @@ export default function Dashboard({ lang }: DashboardProps) {
                 }
               },
               axisLabel: {
-                color: textColor,
+                color: c.textPrimary,
                 fontSize: 10,
                 fontFamily: 'monospace',
                 interval: timeUnit === 'year' ? 0 : 2
@@ -428,7 +440,7 @@ export default function Dashboard({ lang }: DashboardProps) {
                 }
               },
               axisLabel: {
-                color: textColor,
+                color: c.textPrimary,
                 fontSize: 10,
                 fontFamily: 'monospace',
                 formatter: (value: number) => {
@@ -457,13 +469,16 @@ export default function Dashboard({ lang }: DashboardProps) {
       if (handleResize) {
         window.removeEventListener('resize', handleResize);
       }
+      // Dispose ECharts instance on cleanup to prevent memory leaks
+      if (myChart && !myChart.isDisposed()) {
+        myChart.dispose();
+      }
     };
   }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
 
   // Horizontal Chart Effect Hook for List View
   useEffect(() => {
-    const isDark = document.documentElement.classList.contains('dark');
-    const textColor = isDark ? '#94a3b8' : '#475569';
+    const c = readThemeColors();
 
     let myChart: echarts.ECharts | undefined;
     let handleResize: (() => void) | undefined;
@@ -476,8 +491,8 @@ export default function Dashboard({ lang }: DashboardProps) {
         }
 
         if (viewType === 'list') {
-          const gridBorderColor = isDark ? '#1f2333' : '#f1f5f9';
-          const splitLineColor = isDark ? '#1f2333' : '#f1f5f9';
+          const gridBorderColor = c.bgHover;
+          const splitLineColor = c.bgHover;
 
           // Calculate cumulative totals per model for selected range
           const modelTotals: Record<string, number> = {};
@@ -515,24 +530,24 @@ export default function Dashboard({ lang }: DashboardProps) {
               tooltip: {
                 trigger: 'axis',
                 axisPointer: { type: 'shadow' },
-                backgroundColor: isDark ? '#151824' : '#ffffff',
-                borderColor: isDark ? '#1f2333' : '#e2e8f0',
+                backgroundColor: c.bgCard,
+                borderColor: c.border,
                 borderWidth: 1,
                 textStyle: {
-                  color: isDark ? '#f8fafc' : '#0f172a',
+                  color: c.textPrimary,
                   fontFamily: 'system-ui',
                   fontSize: 12
                 },
                 formatter: (params: any) => {
                   const item = params[0];
                   return `
-                    <div style="font-weight: 700; margin-bottom: 4px; font-size: 13px; color: ${isDark ? '#f8fafc' : '#0f172a'};">${item.name}</div>
+                    <div style="font-weight: 700; margin-bottom: 4px; font-size: 13px; color: ${c.textPrimary};">${item.name}</div>
                     <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; font-size: 12px;">
-                      <span style="display: flex; align-items: center; gap: 6px; color: ${isDark ? '#94a3b8' : '#475569'};">
+                      <span style="display: flex; align-items: center; gap: 6px; color: ${c.textSecondary};">
                         <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: ${item.color};"></span>
                         总消耗
                       </span>
-                      <span style="font-weight: 700; color: ${isDark ? '#f8fafc' : '#0f172a'}; font-family: monospace;">${item.value.toLocaleString()} Tokens</span>
+                      <span style="font-weight: 700; color: ${c.textPrimary}; font-family: monospace;">${item.value.toLocaleString()} Tokens</span>
                     </div>
                   `;
                 }
@@ -553,7 +568,7 @@ export default function Dashboard({ lang }: DashboardProps) {
                   }
                 },
                 axisLabel: {
-                  color: textColor,
+                  color: c.textPrimary,
                   fontSize: 10,
                   fontFamily: 'monospace'
                 }
@@ -565,7 +580,7 @@ export default function Dashboard({ lang }: DashboardProps) {
                   lineStyle: { color: gridBorderColor }
                 },
                 axisLabel: {
-                  color: textColor,
+                  color: c.textPrimary,
                   fontSize: 11,
                   fontFamily: 'monospace'
                 },
@@ -583,7 +598,7 @@ export default function Dashboard({ lang }: DashboardProps) {
                     show: true,
                     position: 'right',
                     formatter: (params: any) => params.value.toLocaleString(),
-                    color: textColor,
+                    color: c.textPrimary,
                     fontSize: 10,
                     fontFamily: 'monospace'
                   }
@@ -608,6 +623,9 @@ export default function Dashboard({ lang }: DashboardProps) {
     return () => {
       if (handleResize) {
         window.removeEventListener('resize', handleResize);
+      }
+      if (myChart && !myChart.isDisposed()) {
+        myChart.dispose();
       }
     };
   }, [viewType, billingData, days, displayMode, themeChanged, timeUnit, modelsList]);
@@ -701,6 +719,45 @@ export default function Dashboard({ lang }: DashboardProps) {
           </div>
         ))}
       </div>
+
+      {/* Model Distribution Summary */}
+      {modelsList.length > 0 && Object.keys(billingData).length > 0 && (() => {
+        const modelTotals: Record<string, number> = {};
+        modelsList.forEach(m => { modelTotals[m] = 0; });
+        Object.entries(billingData).forEach(([_, dayData]: any) => {
+          Object.entries(dayData).forEach(([model, val]: any) => {
+            if (modelTotals.hasOwnProperty(model)) {
+              modelTotals[model] += getTokenValue(val);
+            }
+          });
+        });
+        const grandTotal = Object.values(modelTotals).reduce((a: number, b: number) => a + b, 0);
+        if (grandTotal === 0) return null;
+        const sorted = Object.entries(modelTotals)
+          .filter(([_, v]) => (v as number) > 0)
+          .sort(([, a], [, b]) => (b as number) - (a as number));
+        return (
+          <div className="bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-2xl p-5 mb-6 select-none">
+            <h3 className="text-sm font-bold text-[var(--color-text-primary)] mb-3">模型用量分布</h3>
+            <div className="space-y-2">
+              {sorted.map(([model, tokens], idx) => {
+                const pct = Math.round(((tokens as number) / grandTotal) * 100);
+                const barColor = ['#3b82f6','#10b981','#f59e0b','#8b5cf6','#ec4899','#38bdf8'][idx % 6];
+                return (
+                  <div key={model} className="flex items-center gap-3">
+                    <span className="text-xs font-mono font-semibold text-[var(--color-text-primary)] w-36 truncate shrink-0">{model}</span>
+                    <div className="flex-1 h-2.5 bg-gray-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.max(1, pct)}%`, background: barColor }} />
+                    </div>
+                    <span className="text-[10px] font-mono text-[var(--color-text-muted)] w-12 text-right shrink-0">{(tokens as number).toLocaleString()}</span>
+                    <span className="text-[10px] font-bold w-10 text-right shrink-0" style={{ color: barColor }}>{pct}%</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="w-full">
         

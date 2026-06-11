@@ -21,6 +21,7 @@ class MCPClient {
   private nextRequestId = 1;
   private toolsList: MCPTool[] = [];
   private initialized = false;
+  private reader: readline.Interface | null = null;
 
   constructor(name: string, config: MCPConfig) {
     this.name = name;
@@ -56,6 +57,7 @@ class MCPClient {
       input: this.process.stdout!,
       terminal: false,
     });
+    this.reader = reader;
 
     reader.on("line", (line) => {
       try {
@@ -146,6 +148,10 @@ class MCPClient {
   }
 
   public kill(): void {
+    if (this.reader) {
+      this.reader.close();
+      this.reader = null;
+    }
     if (this.process) {
       this.process.kill();
       this.process = null;
@@ -197,4 +203,12 @@ export async function executeMCPTool(serverName: string, toolName: string, args:
     throw new Error(`MCP Server "${serverName}" is not running.`);
   }
   return client.callTool(toolName, args);
+}
+
+export function getMCPServerStatuses(): Record<string, { tools: number; connected: boolean }> {
+  const result: Record<string, { tools: number; connected: boolean }> = {};
+  for (const [name, client] of activeClients.entries()) {
+    result[name] = { tools: client.getTools().length, connected: true };
+  }
+  return result;
 }

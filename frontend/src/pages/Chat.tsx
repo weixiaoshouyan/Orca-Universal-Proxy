@@ -1,5 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy, Brain, Eye, Play } from 'lucide-react';
+import { ArrowUp, ChevronDown, Sparkles, Bot, User, Settings2, Trash2, FileText, X, Square, Terminal, Loader, CheckCircle, Check, CornerUpLeft, Copy, Brain, Eye, Play, Zap, PanelRightOpen, PanelRightClose, GitBranch, FolderGit2, Activity, Clock, Code2, Download, Upload } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize from 'rehype-sanitize';
 import { useNavigate } from 'react-router-dom';
 import { api, fetchEventSource } from '../api';
 import { translate as t } from '../i18n';
@@ -55,6 +59,11 @@ export default function Chat({ lang }: { lang: Language }) {
   const MAX_RETRIES = 2;
   const RETRY_DELAY = 3000;
 
+  // Sync loadingChats to ref for use in useEffect without causing re-renders
+  useEffect(() => {
+    loadingChatsRef.current = loadingChats;
+  }, [loadingChats]);
+
   const handleStop = (chatId?: string) => {
     const id = chatId || activeId;
     const controller = abortControllersRef.current[id];
@@ -67,7 +76,9 @@ export default function Chat({ lang }: { lang: Language }) {
 
   useEffect(() => {
     return () => {
-      Object.values(abortControllersRef.current).forEach(controller => controller.abort());
+      // Don't abort controllers on unmount - let them complete in background
+      // and save results to localStorage
+      // Object.values(abortControllersRef.current).forEach(controller => controller.abort());
     };
   }, []);
   
@@ -76,6 +87,9 @@ export default function Chat({ lang }: { lang: Language }) {
   const [activeSkillId, setActiveSkillId] = useState('');
   const [skills, setSkills] = useState<any[]>([]);
   const [mcpTools, setMcpTools] = useState<any[]>([]);
+  const [currentTaskList, setCurrentTaskList] = useState<{status: 'pending' | 'running' | 'completed' | 'done', description: string}[]>([]);
+  const [isTaskRunning, setIsTaskRunning] = useState(false);
+  const loadingChatsRef = useRef<Record<string, boolean>>({});
 
   // Workspace selector state
   interface Workspace {
@@ -90,6 +104,7 @@ export default function Chat({ lang }: { lang: Language }) {
   const [historySidebarWidth, setHistorySidebarWidth] = useState(() => {
     return parseInt(localStorage.getItem('orca_chat_history_width') || '220');
   });
+  const [convSearch, setConvSearch] = useState('');
 
   const handleMouseDown = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -108,6 +123,24 @@ export default function Chat({ lang }: { lang: Language }) {
       document.removeEventListener('mouseup', handleMouseUp);
     };
 
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleRightSidebarMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = rightSidebarWidth;
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const deltaX = startX - moveEvent.clientX;
+      const newWidth = Math.max(240, Math.min(500, startWidth + deltaX));
+      setRightSidebarWidth(newWidth);
+      localStorage.setItem('orca_right_sidebar_width', String(newWidth));
+    };
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
   };
@@ -158,6 +191,44 @@ export default function Chat({ lang }: { lang: Language }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropdownsRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isAutoScrollEnabled = useRef(true);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  const isUserScrolling = useRef(false);
+  const scrollTimeoutRef = useRef<any>(null);
+  const streamBufferRef = useRef<string>('');
+  const streamRafRef = useRef<number | null>(null);
+  const lastStorageWriteRef = useRef<number>(0);
+  const STORAGE_DEBOUNCE = 2000;
+
+  // Right sidebar state
+  const [rightSidebarOpen, setRightSidebarOpen] = useState(() => {
+    return localStorage.getItem('orca_right_sidebar_open') !== 'false';
+  });
+  const [rightSidebarTab, setRightSidebarTab] = useState<'tasks' | 'files' | 'git'>('tasks');
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(() => {
+    return parseInt(localStorage.getItem('orca_right_sidebar_width') || '300');
+  });
+  const [modifiedFiles, setModifiedFiles] = useState<{path: string; action: string; time: string}[]>([]);
+  const [gitInfo, setGitInfo] = useState<{
+    branch: string; changes: number; untracked: number; status: string; lastCommit: string;
+  }>({ branch: '—', changes: 0, untracked: 0, status: 'clean', lastCommit: '—' });
+  const [contextTokens, setContextTokens] = useState({ used: 0, total: 0, percent: 0 });
+
+  // Track tool execution for file monitoring
+  const trackFileOperation = (toolName: string, content: string) => {
+    const fileOps = ['write_to_file', 'write', 'replace_in_file', 'edit_file', 'create_file'];
+    if (fileOps.some(op => toolName.toLowerCase().includes(op.toLowerCase()))) {
+      const fileMatch = content.match(/["']?([a-zA-Z0-9_\-/.\\]+\.\w{1,10})["']?/);
+      if (fileMatch) {
+        setModifiedFiles(prev => {
+          const exists = prev.find(f => f.path === fileMatch[1]);
+          if (exists) return prev;
+          return [{ path: fileMatch[1], action: 'modified', time: new Date().toLocaleTimeString() }, ...prev.slice(0, 49)];
+        });
+      }
+    }
+  };
 
   const presets: Record<string, { name: string; systemPrompt: string }> = {
     standard: {
@@ -333,8 +404,48 @@ export default function Chat({ lang }: { lang: Language }) {
   };
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Only auto-scroll if user is not actively scrolling
+    if (isAutoScrollEnabled.current && !isUserScrolling.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [conversations, activeId]);
+
+  // Handle user scroll to detect if they've scrolled up
+  const handleMessagesScroll = () => {
+    if (messagesContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
+      
+      // User has scrolled up, disable auto-scroll
+      if (!isAtBottom) {
+        isAutoScrollEnabled.current = false;
+        isUserScrolling.current = true;
+        setShowScrollButton(true);
+      } else {
+        isAutoScrollEnabled.current = true;
+        isUserScrolling.current = false;
+        setShowScrollButton(false);
+      }
+    }
+  };
+
+  // Debounced scroll handler to prevent rapid toggling
+  const debouncedScrollHandler = () => {
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    scrollTimeoutRef.current = setTimeout(() => {
+      handleMessagesScroll();
+    }, 100);
+  };
+
+  // Scroll to bottom when user clicks the button
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    isAutoScrollEnabled.current = true;
+    isUserScrolling.current = false;
+    setShowScrollButton(false);
+  };
 
   // Audio recording timer simulation
   useEffect(() => {
@@ -369,6 +480,48 @@ export default function Chat({ lang }: { lang: Language }) {
 
   const activeChat = conversations.find(c => c.id === activeId);
   const activeWorkspace = workspaces.find(w => w.id === activeWorkspaceId);
+
+  // Calculate context token usage from active conversation
+  useEffect(() => {
+    if (!activeChat) return;
+    const allContent = activeChat.messages.map(m => m.content).join(' ');
+    const estimatedTokens = Math.ceil(allContent.length / 4);
+    const modelLimits: Record<string, number> = {
+      'deepseek-chat': 65536, 'deepseek-reasoner': 65536,
+      'gpt-4o': 128000, 'gpt-4o-mini': 128000, 'gpt-4-turbo': 128000,
+      'claude-sonnet-4-20250514': 200000, 'claude-3-5-haiku-20241022': 200000,
+      'qwen-turbo': 131072, 'qwen-plus': 131072, 'qwen-max': 32768, 'qwen-long': 10000000,
+      'glm-4': 131072, 'glm-4-flash': 131072,
+      'moonshot-v1-8k': 8192, 'moonshot-v1-32k': 32768, 'moonshot-v1-128k': 131072,
+    };
+    const total = modelLimits[activeChat.model] || 65536;
+    const percent = Math.min(100, Math.round((estimatedTokens / total) * 100));
+    setContextTokens({ used: estimatedTokens, total, percent });
+  }, [activeChat?.messages, activeChat?.model]);
+
+  // Git info polling
+  useEffect(() => {
+    if (!activeWorkspace?.path) return;
+    const fetchGitInfo = async () => {
+      try {
+        const res = await api.post('/api/git/status', { cwd: activeWorkspace.path });
+        if (res.data) {
+          setGitInfo({
+            branch: res.data.branch || '—',
+            changes: res.data.modified || 0,
+            untracked: res.data.untracked || 0,
+            status: (res.data.modified || 0) > 0 ? 'dirty' : 'clean',
+            lastCommit: res.data.lastCommit || '—'
+          });
+        }
+      } catch {
+        setGitInfo({ branch: '—', changes: 0, untracked: 0, status: 'no-repo', lastCommit: '—' });
+      }
+    };
+    fetchGitInfo();
+    const interval = setInterval(fetchGitInfo, 15000);
+    return () => clearInterval(interval);
+  }, [activeWorkspace?.path]);
 
   const modelsByProvider = models.reduce((acc, m) => {
     const provider = m.providerName || 'Unknown';
@@ -429,6 +582,95 @@ export default function Chat({ lang }: { lang: Language }) {
     }
     saveChatsToStorage(updated);
   };
+
+  // --- Export / Import ---
+  const handleExportMarkdown = () => {
+    if (!activeChat) return;
+    let md = '# ' + activeChat.title + '\n\n';
+    md += '**Model:** ' + activeChat.model + '\n';
+    md += '**Date:** ' + new Date().toISOString().split('T')[0] + '\n\n---\n\n';
+    for (const msg of activeChat.messages) {
+      if (msg.role === 'system') continue;
+      md += '### ' + (msg.role === 'user' ? 'User' : 'Assistant') + '\n\n';
+      md += msg.content + '\n\n---\n\n';
+    }
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (activeChat.title.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '_') || 'chat') + '.md';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportJSON = () => {
+    const exportData = conversations.map(c => ({
+      title: c.title,
+      model: c.model,
+      preset: c.preset,
+      quality: c.quality,
+      workspaceId: c.workspaceId,
+      messages: c.messages.map(m => ({ role: m.role, content: m.content, timestamp: m.timestamp })),
+      exportedAt: new Date().toISOString(),
+    }));
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'orca-chats-' + new Date().toISOString().split('T')[0] + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImportJSON = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string);
+        if (!Array.isArray(data)) throw new Error('Expected array');
+        const imported: Conversation[] = data.map((c: any, i: number) => ({
+          id: 'import_' + Date.now() + '_' + i,
+          workspaceId: c.workspaceId || activeWorkspaceId,
+          title: c.title || 'Imported Chat ' + (i + 1),
+          preset: c.preset || 'standard',
+          quality: c.quality || 'high',
+          model: c.model || models[0]?.id || 'deepseek-chat',
+          messages: Array.isArray(c.messages) ? c.messages : [],
+        }));
+        const merged = [...imported, ...conversations];
+        saveChatsToStorage(merged);
+        if (imported.length > 0) setActiveId(imported[0].id);
+      } catch (err) {
+        alert(lang === 'en' ? 'Invalid JSON file.' : '无效的 JSON 文件');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === 'k') {
+        e.preventDefault();
+        handleNewChat();
+      } else if (e.key === 'Escape' && activeId && loadingChats[activeId]) {
+        e.preventDefault();
+        handleStop();
+      } else if (e.ctrlKey && e.shiftKey && e.key === 'C') {
+        e.preventDefault();
+        const ac = conversations.find(c => c.id === activeId);
+        if (ac) {
+          const lastAsst = [...ac.messages].reverse().find(m => m.role === 'assistant');
+          if (lastAsst) navigator.clipboard.writeText(lastAsst.content);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeId, loadingChats, conversations]);
 
   // Change active model
   const handleModelChange = (modelId: string) => {
@@ -497,9 +739,69 @@ export default function Chat({ lang }: { lang: Language }) {
     setInput(prev => (prev ? prev + ' ' : '') + randomPrompt);
   };
 
+  // Parse task list from assistant message content
+  const parseTaskList = (content: string) => {
+    const tasks: {status: 'pending' | 'running' | 'completed' | 'done', description: string}[] = [];
+    const lines = content.split('\n');
+    
+    for (const line of lines) {
+      // Match task list patterns: - [ ] task, - [/] task, - [x] task
+      const match = line.match(/^\s*[-*]\s+\[([ xX/])\]\s+(.*)$/);
+      if (match) {
+        const statusChar = match[1].toLowerCase();
+        const description = match[2].trim();
+        
+        let status: 'pending' | 'running' | 'completed' | 'done' = 'pending';
+        if (statusChar === 'x') status = 'completed';
+        else if (statusChar === '/') status = 'running';
+        
+        tasks.push({ status, description });
+      }
+    }
+    
+    return tasks;
+  };
+
+  // Update task list when conversations change
+  useEffect(() => {
+    if (!activeChat || !useAgent) {
+      setCurrentTaskList([]);
+      setIsTaskRunning(false);
+      return;
+    }
+
+    // Find the latest assistant message
+    const assistantMessages = activeChat.messages.filter(m => m.role === 'assistant');
+    if (assistantMessages.length === 0) {
+      setCurrentTaskList([]);
+      setIsTaskRunning(false);
+      return;
+    }
+
+    const latestMessage = assistantMessages[assistantMessages.length - 1];
+    const tasks = parseTaskList(latestMessage.content);
+    
+    if (tasks.length > 0) {
+      setCurrentTaskList(tasks);
+      // Check if any task is still running
+      const hasRunning = tasks.some(t => t.status === 'running');
+      const hasPending = tasks.some(t => t.status === 'pending');
+      setIsTaskRunning(hasRunning || hasPending);
+    } else {
+      // If no tasks found but loading, keep showing previous tasks
+      if (!loadingChatsRef.current[activeId]) {
+        setIsTaskRunning(false);
+      }
+    }
+  }, [conversations, activeId, useAgent]);
+
   const handleSend = async () => {
     const chatId = activeId;
     if ((!input.trim() && !attachedFile) || loadingChats[chatId] || !activeChat) return;
+
+    // Re-enable auto-scroll when user sends a message
+    isAutoScrollEnabled.current = true;
+    setShowScrollButton(false);
 
     let userPrompt = input;
     // Embed attached file if exists
@@ -556,28 +858,70 @@ export default function Chat({ lang }: { lang: Language }) {
           const parsed = JSON.parse(data);
           const delta = parsed.choices?.[0]?.delta?.content || '';
           if (delta) {
-            setConversations(prev => {
-              const updated = prev.map(c => {
-                if (c.id === chatId) {
-                  const msgs = [...c.messages];
-                  if (msgs[assistantIndex]) {
-                    msgs[assistantIndex] = {
-                      role: 'assistant',
-                      content: msgs[assistantIndex].content + delta,
-                      timestamp: msgs[assistantIndex].timestamp || timeStr
-                    };
+            streamBufferRef.current += delta;
+            // Batch state updates via rAF to prevent render jank
+            if (!streamRafRef.current) {
+              streamRafRef.current = requestAnimationFrame(() => {
+                streamRafRef.current = null;
+                const buffered = streamBufferRef.current;
+                if (!buffered) return;
+                streamBufferRef.current = '';
+                setConversations(prev => {
+                  const updated = prev.map(c => {
+                    if (c.id === chatId) {
+                      const msgs = [...c.messages];
+                      if (msgs[assistantIndex]) {
+                        msgs[assistantIndex] = {
+                          role: 'assistant',
+                          content: msgs[assistantIndex].content + buffered,
+                          timestamp: msgs[assistantIndex].timestamp || timeStr
+                        };
+                      }
+                      return { ...c, messages: msgs };
+                    }
+                    return c;
+                  });
+                  // Debounce localStorage writes
+                  const now = Date.now();
+                  if (now - lastStorageWriteRef.current >= STORAGE_DEBOUNCE) {
+                    lastStorageWriteRef.current = now;
+                    localStorage.setItem('orca_conversations', JSON.stringify(updated));
                   }
-                  return { ...c, messages: msgs };
-                }
-                return c;
+                  return updated;
+                });
               });
-              localStorage.setItem('orca_conversations', JSON.stringify(updated));
-              return updated;
-            });
+            }
           }
         } catch(e) {}
       },
       () => {
+        // Flush remaining buffer
+        if (streamRafRef.current) {
+          cancelAnimationFrame(streamRafRef.current);
+          streamRafRef.current = null;
+        }
+        const remaining = streamBufferRef.current;
+        if (remaining) {
+          streamBufferRef.current = '';
+          setConversations(prev => {
+            const updated = prev.map(c => {
+              if (c.id === chatId) {
+                const msgs = [...c.messages];
+                if (msgs[assistantIndex]) {
+                  msgs[assistantIndex] = {
+                    role: 'assistant',
+                    content: msgs[assistantIndex].content + remaining,
+                    timestamp: msgs[assistantIndex].timestamp || timeStr
+                  };
+                }
+                return { ...c, messages: msgs };
+              }
+              return c;
+            });
+            localStorage.setItem('orca_conversations', JSON.stringify(updated));
+            return updated;
+          });
+        }
         setLoadingChats(prev => ({ ...prev, [chatId]: false }));
         delete abortControllersRef.current[chatId];
       },
@@ -590,6 +934,13 @@ export default function Chat({ lang }: { lang: Language }) {
           return;
         }
         console.error(err);
+        // Flush any pending stream buffer before retrying
+        if (streamRafRef.current) {
+          cancelAnimationFrame(streamRafRef.current);
+          streamRafRef.current = null;
+        }
+        const pendingBuffer = streamBufferRef.current;
+        streamBufferRef.current = '';
         const currentRetry = retryCountRef.current[chatId] || 0;
         if (currentRetry < MAX_RETRIES) {
           retryCountRef.current[chatId] = currentRetry + 1;
@@ -602,7 +953,8 @@ export default function Chat({ lang }: { lang: Language }) {
               if (c.id === chatId) {
                 const msgs = [...c.messages];
                 if (msgs[assistantIndex]) {
-                  msgs[assistantIndex] = { role: 'assistant', content: msgs[assistantIndex].content + retryMsg, timestamp: msgs[assistantIndex].timestamp || timeStr };
+                  const currentContent = msgs[assistantIndex].content + (pendingBuffer || '');
+                  msgs[assistantIndex] = { role: 'assistant', content: currentContent + retryMsg, timestamp: msgs[assistantIndex].timestamp || timeStr };
                 }
                 return { ...c, messages: msgs };
               }
@@ -831,6 +1183,25 @@ export default function Chat({ lang }: { lang: Language }) {
           </div>
         )}
         
+        {/* Conversation Search */}
+        <div className="relative">
+          <input
+            type="text"
+            value={convSearch}
+            onChange={(e) => setConvSearch(e.target.value)}
+            placeholder={lang === 'en' ? 'Search conversations...' : '搜索会话...'}
+            className="w-full bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-lg px-3 py-2 text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]/40 focus:ring-1 focus:ring-[var(--color-primary)]/20 transition-all"
+          />
+          {convSearch && (
+            <button
+              onClick={() => setConvSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
         <button 
           onClick={handleNewChat}
           className="flex items-center justify-center gap-1.5 w-full py-2 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-primary)] text-sm font-semibold rounded-lg shadow-sm transition-all cursor-pointer mt-1"
@@ -839,8 +1210,41 @@ export default function Chat({ lang }: { lang: Language }) {
           <span>{lang === 'en' ? 'New Chat' : '新建会话'}</span>
         </button>
 
+        {/* Export / Import row */}
+        <div className="flex gap-1 mt-1">
+          <button
+            onClick={handleExportMarkdown}
+            disabled={!activeChat}
+            title={lang === 'en' ? 'Export as Markdown' : '导出 Markdown'}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] text-xs rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3 h-3" />
+            <span>MD</span>
+          </button>
+          <button
+            onClick={handleExportJSON}
+            disabled={conversations.length === 0}
+            title={lang === 'en' ? 'Export all as JSON' : '导出全部 JSON'}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] text-xs rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-3 h-3" />
+            <span>JSON</span>
+          </button>
+          <label
+            title={lang === 'en' ? 'Import JSON' : '导入 JSON'}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-white dark:bg-slate-900 border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] text-xs rounded-lg transition-all cursor-pointer"
+          >
+            <Upload className="w-3 h-3" />
+            <span>{lang === 'en' ? 'Import' : '导入'}</span>
+            <input type="file" accept=".json" onChange={handleImportJSON} className="hidden" />
+          </label>
+        </div>
+
         <div className="flex-1 overflow-y-auto space-y-1 pr-1 mt-2">
-          {filteredConversations.map(chat => {
+          {(convSearch ? filteredConversations.filter(c => 
+            c.title.toLowerCase().includes(convSearch.toLowerCase()) ||
+            c.messages.some(m => m.content.toLowerCase().includes(convSearch.toLowerCase()))
+          ) : filteredConversations).map(chat => {
             const isActive = chat.id === activeId;
             const isChatLoading = loadingChats[chat.id];
             return (
@@ -853,9 +1257,16 @@ export default function Chat({ lang }: { lang: Language }) {
                     : 'text-[var(--color-text-primary)] hover:bg-[var(--color-bg-hover)]'
                 }`}
               >
-                <div className="truncate flex-1 pr-2 text-[13px] flex items-center gap-1.5">
-                  {isChatLoading && <Loader className="w-3 h-3 animate-spin text-[#24818d] shrink-0" />}
-                  <span className="truncate">{chat.title}</span>
+                <div className="truncate flex-1 pr-2">
+                  <div className="text-[13px] flex items-center gap-1.5">
+                    {isChatLoading && <Loader className="w-3 h-3 animate-spin text-[#24818d] shrink-0" />}
+                    <span className="truncate">{chat.title}</span>
+                  </div>
+                  {chat.messages.length > 0 && (
+                    <div className="text-[10px] text-[var(--color-text-muted)] truncate mt-0.5 pl-[1px]">
+                      {chat.messages[chat.messages.length - 1].content?.substring(0, 30).replace(/[\n\r]/g, ' ') || ''}
+                    </div>
+                  )}
                 </div>
                 <button 
                   onClick={(e) => handleDeleteChat(chat.id, e)}
@@ -913,7 +1324,42 @@ export default function Chat({ lang }: { lang: Language }) {
         )}
 
         {/* Message history */}
-        <div className="flex-1 overflow-y-auto mb-4 bg-[var(--color-bg-base)] rounded-xl pr-2 space-y-6">
+        <div 
+          ref={messagesContainerRef}
+          onScroll={debouncedScrollHandler}
+          className="flex-1 overflow-y-auto mb-4 bg-[var(--color-bg-base)] rounded-xl pr-2 space-y-6"
+        >
+          {(!activeChat || activeChat.messages.filter(msg => msg.role !== 'system').length === 0) && (
+            <div className="flex flex-col items-center justify-center h-full min-h-[400px] text-center px-4 select-none">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center mb-4 shadow-lg shadow-emerald-500/20">
+                <Bot className="w-8 h-8 text-white" />
+              </div>
+              <h2 className="text-xl font-bold text-[var(--color-text-primary)] mb-1">
+                {lang === 'en' ? 'Hello! How can I help you?' : '你好！有什么可以帮你的？'}
+              </h2>
+              <p className="text-sm text-[var(--color-text-muted)] mb-6">
+                {useAgent ? (lang === 'en' ? 'Build Mode · Full access' : 'Build 模式 · 完全权限') : (lang === 'en' ? 'Plan Mode · Read-only' : 'Plan 模式 · 只读')}
+                {activeChat && ` · ${activeChat.model}`}
+              </p>
+              <div className="grid grid-cols-2 gap-2 max-w-md w-full">
+                {[
+                  { icon: <FileText className="w-4 h-4" />, text: lang === 'en' ? 'Analyze this codebase' : '分析当前代码库' },
+                  { icon: <Zap className="w-4 h-4" />, text: lang === 'en' ? 'Fix bugs in my project' : '修复项目中的 Bug' },
+                  { icon: <Terminal className="w-4 h-4" />, text: lang === 'en' ? 'Write unit tests' : '编写单元测试' },
+                  { icon: <Sparkles className="w-4 h-4" />, text: lang === 'en' ? 'Refactor & optimize' : '重构和优化代码' },
+                ].map((item, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => setInput(item.text)}
+                    className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[var(--color-bg-card)] border border-[var(--color-border-base)] hover:bg-[var(--color-bg-hover)] text-sm text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-all cursor-pointer shadow-sm"
+                  >
+                    {item.icon}
+                    <span>{item.text}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           {activeChat?.messages.filter(msg => msg.role !== 'system').map((msg, i) => (
             <div key={i} className={`flex gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
               {msg.role !== 'system' && (
@@ -944,8 +1390,10 @@ export default function Chat({ lang }: { lang: Language }) {
                                 {parseTextWithCodeBlocksAndTasks(block.content).map((subBlock, sIdx) => {
                                   if (subBlock.type === 'text') {
                                     return (
-                                      <div key={sIdx} className="whitespace-pre-wrap">
-                                        {subBlock.content}
+                                      <div key={sIdx} className="orca-markdown">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>
+                                          {subBlock.content}
+                                        </ReactMarkdown>
                                       </div>
                                     );
                                   } else if (subBlock.type === 'tasks' && subBlock.tasks) {
@@ -977,6 +1425,7 @@ export default function Chat({ lang }: { lang: Language }) {
                               />
                             );
                           } else {
+                            (() => { trackFileOperation(block.toolName || '', block.content || ''); })();
                             return (
                               <ToolExecutionBlock 
                                 key={idx} 
@@ -1025,6 +1474,48 @@ export default function Chat({ lang }: { lang: Language }) {
           ))}
           <div ref={messagesEndRef} />
         </div>
+
+        {/* Scroll to bottom button */}
+        {showScrollButton && (
+          <button
+            onClick={scrollToBottom}
+            className="absolute bottom-20 right-4 w-10 h-10 bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white rounded-full shadow-lg flex items-center justify-center transition-all cursor-pointer z-10"
+            title={lang === 'en' ? 'Scroll to bottom' : '滚动到底部'}
+          >
+            <ChevronDown className="w-5 h-5" />
+          </button>
+        )}
+
+        {/* Context Window Indicator */}
+        {activeChat && (
+          <div className="shrink-0 px-1">
+            <div className="flex items-center justify-between text-[10px] text-[var(--color-text-muted)] mb-1 px-0.5">
+              <div className="flex items-center gap-1">
+                <Activity className="w-3 h-3" />
+                <span>{lang === 'en' ? 'Context' : '上下文窗口'}</span>
+              </div>
+              <span className="font-mono">
+                {contextTokens.used.toLocaleString()} / {contextTokens.total.toLocaleString()} tokens
+                <span className="ml-1">({contextTokens.percent}%)</span>
+              </span>
+            </div>
+            <div className="w-full h-1.5 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
+              <div 
+                className={`h-full rounded-full transition-all duration-500 ${
+                  contextTokens.percent > 85 ? 'bg-red-500' :
+                  contextTokens.percent > 60 ? 'bg-yellow-500' :
+                  'bg-emerald-500'
+                }`}
+                style={{ width: `${Math.max(1, contextTokens.percent)}%` }}
+              />
+            </div>
+            {contextTokens.percent > 85 && (
+              <div className="text-[10px] text-red-500 mt-0.5 px-0.5">
+                {lang === 'en' ? '⚠️ Context nearly full — consider summarizing or starting a new chat' : '⚠️ 上下文接近上限 — 建议总结或开启新会话'}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Input box section */}
         <div className="shrink-0 flex flex-col gap-3">
@@ -1086,7 +1577,14 @@ export default function Chat({ lang }: { lang: Language }) {
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                setInput(e.target.value);
+                const el = textareaRef.current;
+                if (el) {
+                  el.style.height = 'auto';
+                  el.style.height = Math.min(el.scrollHeight, 300) + 'px';
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
@@ -1094,7 +1592,7 @@ export default function Chat({ lang }: { lang: Language }) {
                 }
               }}
               placeholder={t('chat.input.placeholder', lang)}
-              className="w-full bg-transparent text-[var(--color-text-primary)] p-4 pb-2 resize-none outline-none text-[15px] min-h-[80px]"
+              className="w-full bg-transparent text-[var(--color-text-primary)] p-4 pb-2 resize-none outline-none text-[15px] min-h-[80px] max-h-[300px] overflow-y-auto"
               rows={1}
             />
             
@@ -1365,6 +1863,306 @@ export default function Chat({ lang }: { lang: Language }) {
           )}
         </div>
       </div>
+
+      {/* Right Sidebar Toggle Button (when collapsed) */}
+      {!rightSidebarOpen && (
+        <button
+          onClick={() => {
+            setRightSidebarOpen(true);
+            localStorage.setItem('orca_right_sidebar_open', 'true');
+          }}
+          className="fixed right-4 top-1/2 -translate-y-1/2 w-8 h-16 bg-[var(--color-bg-card)] border border-[var(--color-border-base)] rounded-l-lg shadow-md flex items-center justify-center hover:bg-[var(--color-bg-hover)] transition-all cursor-pointer z-20"
+          title={lang === 'en' ? 'Open sidebar' : '打开侧边栏'}
+        >
+          <PanelRightOpen className="w-4 h-4 text-[var(--color-text-secondary)]" />
+        </button>
+      )}
+
+      {/* Right Sidebar Panel */}
+      {rightSidebarOpen && (
+        <div
+          style={{ width: `${rightSidebarWidth}px` }}
+          className="relative flex flex-col border-l border-[var(--color-border-base)] pl-4 h-full shrink-0"
+        >
+          {/* Resize Handle */}
+          <div
+            onMouseDown={handleRightSidebarMouseDown}
+            className="absolute top-0 left-0 w-1.5 h-full cursor-col-resize hover:bg-[var(--color-primary)]/40 active:bg-[var(--color-primary)]/60 transition-colors z-30"
+            title="Drag to resize"
+          />
+
+          {/* Sidebar Header with Tabs & Collapse */}
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-[var(--color-border-base)] shrink-0">
+            <div className="flex items-center gap-0.5 bg-[var(--color-bg-hover)] rounded-lg p-0.5">
+              <button
+                onClick={() => setRightSidebarTab('tasks')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  rightSidebarTab === 'tasks'
+                    ? 'bg-white dark:bg-slate-800 text-[var(--color-text-primary)] shadow-sm'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <Activity className="w-3 h-3" />
+                <span>{lang === 'en' ? 'Tasks' : '任务'}</span>
+                {currentTaskList.length > 0 && (
+                  <span className={`text-[10px] font-bold px-1 rounded ${
+                    isTaskRunning ? 'bg-blue-500 text-white' : 'bg-emerald-500 text-white'
+                  }`}>
+                    {currentTaskList.filter(t => t.status === 'completed').length}/{currentTaskList.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setRightSidebarTab('files')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  rightSidebarTab === 'files'
+                    ? 'bg-white dark:bg-slate-800 text-[var(--color-text-primary)] shadow-sm'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <FileText className="w-3 h-3" />
+                <span>{lang === 'en' ? 'Files' : '文件'}</span>
+                {modifiedFiles.length > 0 && (
+                  <span className="text-[10px] font-bold px-1 rounded bg-amber-500 text-white">{modifiedFiles.length}</span>
+                )}
+              </button>
+              <button
+                onClick={() => setRightSidebarTab('git')}
+                className={`px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer flex items-center gap-1 ${
+                  rightSidebarTab === 'git'
+                    ? 'bg-white dark:bg-slate-800 text-[var(--color-text-primary)] shadow-sm'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]'
+                }`}
+              >
+                <GitBranch className="w-3 h-3" />
+                <span>Git</span>
+                {gitInfo.status === 'dirty' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                )}
+              </button>
+            </div>
+            <button
+              onClick={() => {
+                setRightSidebarOpen(false);
+                localStorage.setItem('orca_right_sidebar_open', 'false');
+              }}
+              className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+              title={lang === 'en' ? 'Close sidebar' : '关闭侧边栏'}
+            >
+              <PanelRightClose className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Tab Content */}
+          <div className="flex-1 overflow-y-auto">
+            {/* Tasks Tab */}
+            {rightSidebarTab === 'tasks' && (
+              <div className="space-y-3">
+                {currentTaskList.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-[200px] text-center px-4">
+                    <Activity className="w-10 h-10 text-[var(--color-text-muted)] mb-3 opacity-40" />
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      {lang === 'en'
+                        ? 'No active tasks. Start a build session to see tasks here.'
+                        : '暂无活跃任务。启动 Build 模式后会在此显示任务列表。'}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Progress Bar */}
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between text-[10px] text-[var(--color-text-muted)]">
+                        <span>{lang === 'en' ? 'Overall Progress' : '总体进度'}</span>
+                        <span className="font-mono">
+                          {Math.round(currentTaskList.length > 0
+                            ? (currentTaskList.filter(t => t.status === 'completed').length / currentTaskList.length) * 100
+                            : 0)}%
+                        </span>
+                      </div>
+                      <div className="w-full h-2 bg-gray-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-700 ${
+                            isTaskRunning ? 'bg-blue-500' : 'bg-emerald-500'
+                          }`}
+                          style={{
+                            width: `${currentTaskList.length > 0
+                              ? (currentTaskList.filter(t => t.status === 'completed').length / currentTaskList.length) * 100
+                              : 0}%`
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Task Items */}
+                    <div className="space-y-0.5">
+                      {currentTaskList.map((task, idx) => (
+                        <div
+                          key={idx}
+                          className={`flex items-start gap-2.5 p-2 rounded-lg text-xs transition-colors ${
+                            task.status === 'running'
+                              ? 'bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800/30'
+                              : 'hover:bg-[var(--color-bg-hover)]'
+                          }`}
+                        >
+                          <div className="mt-0.5 shrink-0">
+                            {task.status === 'completed' && (
+                              <CheckCircle className="w-4 h-4 text-emerald-500" />
+                            )}
+                            {task.status === 'running' && (
+                              <Loader className="w-4 h-4 text-blue-500 animate-spin" />
+                            )}
+                            {task.status === 'pending' && (
+                              <Clock className="w-4 h-4 text-gray-400" />
+                            )}
+                          </div>
+                          <span className={`flex-1 leading-relaxed ${
+                            task.status === 'completed'
+                              ? 'text-[var(--color-text-muted)] line-through'
+                              : task.status === 'running'
+                                ? 'text-blue-700 dark:text-blue-300 font-semibold'
+                                : 'text-[var(--color-text-secondary)]'
+                          }`}>
+                            {task.description}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Files Tab */}
+            {rightSidebarTab === 'files' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+                    {lang === 'en' ? 'Modified Files' : '已修改文件'}
+                  </span>
+                  {modifiedFiles.length > 0 && (
+                    <button
+                      onClick={() => setModifiedFiles([])}
+                      className="text-[10px] text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                    >
+                      {lang === 'en' ? 'Clear' : '清除'}
+                    </button>
+                  )}
+                </div>
+                {modifiedFiles.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-[200px] text-center px-4">
+                    <Code2 className="w-10 h-10 text-[var(--color-text-muted)] mb-3 opacity-40" />
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      {lang === 'en'
+                        ? 'Files modified during the session will appear here.'
+                        : '会话中修改的文件将在此显示。'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-0.5">
+                    {modifiedFiles.map((file, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-2 p-2 rounded-lg text-xs hover:bg-[var(--color-bg-hover)] transition-colors"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono text-[11px] text-[var(--color-text-primary)] truncate">
+                            {file.path}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-[10px] px-1.5 py-0.1 rounded bg-amber-100 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300 font-semibold">
+                              {file.action}
+                            </span>
+                            <span className="text-[10px] text-[var(--color-text-muted)]">{file.time}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Git Tab */}
+            {rightSidebarTab === 'git' && (
+              <div className="space-y-4">
+                {gitInfo.status === 'no-repo' ? (
+                  <div className="flex flex-col items-center justify-center h-[200px] text-center px-4">
+                    <FolderGit2 className="w-10 h-10 text-[var(--color-text-muted)] mb-3 opacity-40" />
+                    <p className="text-xs text-[var(--color-text-muted)]">
+                      {lang === 'en' ? 'Not a git repository.' : '当前工作区不是 Git 仓库。'}
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    {/* Branch Info */}
+                    <div className="bg-[var(--color-bg-hover)] rounded-xl p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <GitBranch className="w-4 h-4 text-[var(--color-primary)]" />
+                        <span className="text-sm font-bold font-mono text-[var(--color-text-primary)]">{gitInfo.branch}</span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="flex flex-col">
+                          <span className="text-[var(--color-text-muted)]">{lang === 'en' ? 'Modified' : '已修改'}</span>
+                          <span className={`font-bold font-mono text-sm ${gitInfo.changes > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                            {gitInfo.changes}
+                          </span>
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-[var(--color-text-muted)]">{lang === 'en' ? 'Untracked' : '未跟踪'}</span>
+                          <span className={`font-bold font-mono text-sm ${gitInfo.untracked > 0 ? 'text-amber-500' : 'text-emerald-500'}`}>
+                            {gitInfo.untracked}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Status Badge */}
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
+                        gitInfo.status === 'clean'
+                          ? 'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300'
+                          : 'bg-amber-100 dark:bg-amber-900/20 text-amber-700 dark:text-amber-300'
+                      }`}>
+                        {gitInfo.status === 'clean' ? '✓ Clean' : '● Dirty'}
+                      </span>
+                      <span className="text-[10px] text-[var(--color-text-muted)]">
+                        {lang === 'en' ? 'Last commit' : '最近提交'}:
+                        <span className="font-mono ml-1">{gitInfo.lastCommit}</span>
+                      </span>
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => {
+                          setInput(input => input + (input ? ' ' : '') + (lang === 'en' ? 'Show me the git diff' : '请帮我查看当前的 git diff'));
+                          textareaRef.current?.focus();
+                        }}
+                        className="flex-1 py-2 text-xs font-semibold rounded-lg bg-[var(--color-bg-hover)] border border-[var(--color-border-base)] hover:bg-white dark:hover:bg-slate-800 text-[var(--color-text-primary)] transition-colors cursor-pointer text-center"
+                        title={lang === 'en' ? 'Ask agent to show git diff' : '请智能体显示 git diff'}
+                      >
+                        {lang === 'en' ? 'Show Diff' : '查看改动'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setInput(input => input + (input ? ' ' : '') + (lang === 'en' ? 'Summarize the recent git changes and suggest a commit message' : '请总结最近的 git 改动并建议一个 commit message'));
+                          textareaRef.current?.focus();
+                        }}
+                        className="flex-1 py-2 text-xs font-semibold rounded-lg bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 hover:bg-[var(--color-primary)]/20 text-[var(--color-primary)] transition-colors cursor-pointer text-center"
+                        title={lang === 'en' ? 'Ask agent for commit suggestion' : '请智能体建议 commit'}
+                      >
+                        {lang === 'en' ? 'Suggest Commit' : '提交建议'}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1460,8 +2258,13 @@ function cleanThinkTags(text: string): string {
 }
 
 function ThinkingBlock({ content, status, lang }: { content: string; status?: 'done' | 'running'; lang: Language }) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(status === 'running');
   const cleanedContent = cleanThinkTags(content);
+
+  useEffect(() => {
+    if (status === 'running') setIsExpanded(true);
+    else if (status === 'done') setIsExpanded(false);
+  }, [status]);
   
   return (
     <div className="my-3 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-sm bg-gray-50/50 dark:bg-slate-900/30">
@@ -1487,29 +2290,97 @@ function ThinkingBlock({ content, status, lang }: { content: string; status?: 'd
   );
 }
 
-function CodeBlock({ content, language }: { content: string; language?: string }) {
-  const [copied, setCopied] = useState(false);
+// Lightweight syntax tokenizer for code blocks
+const SYNTAX_KW: Record<string, string[]> = {
+  js: ['const','let','var','function','return','if','else','for','while','class','import','export','from','default','async','await','new','this','try','catch','throw','typeof','instanceof','switch','case','break','continue','do','in','of','yield','null','undefined','true','false','void','delete','super','extends','static','get','set'],
+  ts: ['const','let','var','function','return','if','else','for','while','class','import','export','from','default','async','await','new','this','try','catch','throw','typeof','instanceof','switch','case','type','interface','enum','implements','extends','abstract','readonly','private','public','protected','as','is','keyof','infer','never','unknown','any','null','undefined','true','false','void','declare'],
+  py: ['def','class','import','from','return','if','elif','else','for','while','try','except','finally','with','as','in','not','and','or','is','True','False','None','pass','break','continue','yield','lambda','raise','global','nonlocal','assert','del','async','await','self','print'],
+  go: ['func','package','import','var','const','type','struct','interface','return','if','else','for','range','switch','case','default','go','defer','chan','map','select','make','new','append','len','nil','true','false','break','continue','fallthrough'],
+  rs: ['fn','let','mut','const','if','else','for','while','loop','match','return','struct','enum','impl','trait','pub','use','mod','self','super','crate','async','await','move','ref','type','where','true','false','Some','None','Ok','Err','unsafe','extern','static'],
+  java: ['public','private','protected','static','final','class','interface','extends','implements','return','if','else','for','while','try','catch','throw','throws','new','import','package','void','int','long','double','float','boolean','char','String','null','true','false','this','super','abstract','synchronized'],
+  sh: ['if','then','else','elif','fi','for','while','do','done','case','esac','function','return','exit','echo','export','source','local','readonly','shift','set','unset','trap','eval','exec','cd','pwd','ls','cat','grep','sed','awk','find','sudo','chmod','mkdir','rm','cp','mv'],
+  css: ['color','background','margin','padding','border','font','display','position','width','height','top','left','right','bottom','flex','grid','align','justify','transform','transition','animation','opacity','overflow','z-index','cursor','box-shadow'],
+};
+const KW_ALIAS: Record<string, string> = { javascript: 'js', typescript: 'ts', python: 'py', golang: 'go', rust: 'rs', bash: 'sh', shell: 'sh', jsx: 'js', tsx: 'ts', powershell: 'sh', scss: 'css', less: 'css' };
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+function tokenizeCode(code: string, lang?: string): string {
+  const normLang = KW_ALIAS[lang || ''] || lang || '';
+  const keywords = SYNTAX_KW[normLang] || SYNTAX_KW['js'] || [];
+  let html = '';
+  let i = 0;
+  while (i < code.length) {
+    if (code[i] === '/' && code[i + 1] === '/') {
+      let end = code.indexOf('\n', i);
+      if (end === -1) end = code.length;
+      html += `<span class="hl-cmt">${esc(code.slice(i, end))}</span>`;
+      i = end;
+    } else if (code[i] === '#' && (normLang === 'py' || normLang === 'sh') && (i === 0 || code[i - 1] === '\n')) {
+      let end = code.indexOf('\n', i);
+      if (end === -1) end = code.length;
+      html += `<span class="hl-cmt">${esc(code.slice(i, end))}</span>`;
+      i = end;
+    } else if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+      const q = code[i]; let j = i + 1;
+      while (j < code.length && code[j] !== q) { if (code[j] === '\\') j++; j++; }
+      html += `<span class="hl-str">${esc(code.slice(i, Math.min(j + 1, code.length)))}</span>`;
+      i = j + 1;
+    } else if (/[0-9]/.test(code[i]) && (i === 0 || !/[a-zA-Z_$]/.test(code[i - 1]))) {
+      let j = i;
+      while (j < code.length && /[0-9.xXa-fA-FeE_]/.test(code[j])) j++;
+      html += `<span class="hl-num">${esc(code.slice(i, j))}</span>`;
+      i = j;
+    } else if (/[a-zA-Z_$]/.test(code[i])) {
+      let j = i;
+      while (j < code.length && /[a-zA-Z0-9_$]/.test(code[j])) j++;
+      const word = code.slice(i, j);
+      if (keywords.includes(word)) html += `<span class="hl-kw">${esc(word)}</span>`;
+      else html += esc(word);
+      i = j;
+    } else {
+      html += esc(code[i]); i++;
+    }
+  }
+  return html;
+}
+function esc(s: string): string { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function CodeBlock({ content, language, highlightLine }: { content: string; language?: string; highlightLine?: number }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => { navigator.clipboard.writeText(content); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  const lines = content.split('\n');
+  const lineCount = lines.length;
+  const highlighted = lineCount <= 500 ? tokenizeCode(content, language) : esc(content);
+  const lineNumWidth = String(lineCount).length;
 
   return (
     <div className="my-4 border border-[var(--color-border-base)] rounded-xl overflow-hidden shadow-sm bg-gray-50 dark:bg-slate-900 font-mono text-[13px] leading-relaxed">
       <div className="flex items-center justify-between px-4 py-2 bg-gray-100 dark:bg-slate-800 text-gray-500 dark:text-gray-400 text-xs border-b border-[var(--color-border-base)] select-none">
-        <span className="font-semibold uppercase tracking-wider">{language || 'code'}</span>
-        <button 
-          onClick={handleCopy}
-          className="flex items-center gap-1 hover:text-[var(--color-text-primary)] transition-colors px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-slate-800 text-[11px] font-semibold cursor-pointer text-gray-600 dark:text-gray-300"
-        >
+        <div className="flex items-center gap-3">
+          <span className="font-semibold uppercase tracking-wider">{language || 'code'}</span>
+          <span className="text-[10px] opacity-60">{lineCount} lines</span>
+        </div>
+        <button onClick={handleCopy} className="flex items-center gap-1 hover:text-[var(--color-text-primary)] transition-colors px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-slate-800 text-[11px] font-semibold cursor-pointer text-gray-600 dark:text-gray-300">
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
-      <pre className="p-4 overflow-x-auto max-h-[500px] whitespace-pre text-[var(--color-text-primary)]">
-        <code>{content}</code>
-      </pre>
+      <div className="flex overflow-x-auto max-h-[500px]">
+        {/* Line numbers gutter */}
+        <div className="shrink-0 select-none text-right pr-3 pl-3 py-4 bg-gray-100/50 dark:bg-slate-800/30 text-[11px] leading-relaxed text-gray-400 dark:text-gray-600 border-r border-[var(--color-border-base)] font-mono">
+          {lines.map((_, i) => (
+            <div 
+              key={i} 
+              className={`${highlightLine === i + 1 ? 'text-[var(--color-primary)] font-bold' : ''}`}
+              style={{ minWidth: `${lineNumWidth + 1}ch` }}
+            >
+              {i + 1}
+            </div>
+          ))}
+        </div>
+        {/* Code */}
+        <pre className="p-4 whitespace-pre text-[var(--color-text-primary)] min-w-0 flex-1">
+          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+        </pre>
+      </div>
     </div>
   );
 }
@@ -1739,63 +2610,69 @@ function ToolExecutionBlock({ block, lang }: { block: any; lang: string }) {
   const isRunning = block.status === 'running';
 
   return (
-    <div className="my-4 border border-slate-200/80 dark:border-slate-800/80 rounded-xl overflow-hidden shadow-lg bg-[#181825] text-slate-200 transition-all duration-300">
-      {/* Terminal Header */}
+    <div className="my-4 rounded-xl overflow-hidden shadow-md border border-[var(--color-border-base)] bg-gradient-to-br from-[var(--color-bg-card)] to-[var(--color-bg-base)] transition-all duration-300">
+      {/* Header */}
       <div 
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex items-center justify-between px-4 py-3 bg-[#11111b]/90 hover:bg-[#1e1e2e] text-slate-300 text-xs font-mono select-none cursor-pointer border-b border-[#313244]/50 transition-colors"
+        className="flex items-center justify-between px-4 py-3 bg-[var(--color-bg-sidebar)] hover:bg-[var(--color-bg-hover)] text-xs select-none cursor-pointer border-b border-[var(--color-border-base)] transition-colors"
       >
-        {/* Left: macOS dots & Title */}
+        {/* Left: Icon & Title */}
         <div className="flex items-center gap-3">
-          <div className="flex gap-1.5 shrink-0 select-none">
-            <span className="w-3 h-3 rounded-full bg-[#f38ba8] opacity-90"></span>
-            <span className="w-3 h-3 rounded-full bg-[#f9e2af] opacity-90"></span>
-            <span className="w-3 h-3 rounded-full bg-[#a6e3a1] opacity-90"></span>
+          <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+            isRunning 
+              ? 'bg-blue-500/10 text-blue-500' 
+              : 'bg-emerald-500/10 text-emerald-500'
+          }`}>
+            {isRunning ? (
+              <Loader className="w-4 h-4 animate-spin" />
+            ) : (
+              <Terminal className="w-4 h-4" />
+            )}
           </div>
-          <span className="text-[11px] text-slate-400 font-bold border-l border-slate-700/50 pl-3 flex items-center gap-1.5">
-            <Terminal className="w-3.5 h-3.5 text-[#89b4fa]" />
-            <span>
-              {lang === 'en' ? 'Subprocess Terminal:' : '子进程终端:'} 
-              <span className="text-white ml-1 font-bold">{block.toolName}</span>
+          <div className="flex flex-col">
+            <span className="font-semibold text-[var(--color-text-primary)]">
+              {block.toolName || 'Terminal'}
             </span>
-          </span>
+            <span className="text-[10px] text-[var(--color-text-muted)]">
+              {isRunning 
+                ? (lang === 'en' ? 'Executing...' : '执行中...') 
+                : (lang === 'en' ? 'Completed' : '已完成')
+              }
+            </span>
+          </div>
         </div>
         
         {/* Right: Status badge & Toggle */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {isRunning ? (
-            <span className="flex items-center gap-1.5 text-[#f9e2af] font-bold bg-[#f9e2af]/10 px-2 py-0.5 rounded-full text-[10.5px] border border-[#f9e2af]/25 animate-pulse">
-              <Loader className="w-3.5 h-3.5 animate-spin" /> 
-              <span>{lang === 'en' ? 'Running' : '执行中'}</span>
+            <span className="flex items-center gap-1.5 text-blue-500 font-semibold bg-blue-500/10 px-2.5 py-1 rounded-full text-[11px] border border-blue-500/20">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+              <span>{lang === 'en' ? 'Running' : '运行中'}</span>
             </span>
           ) : (
-            <span className="flex items-center gap-1.5 text-[#a6e3a1] font-bold bg-[#a6e3a1]/10 px-2 py-0.5 rounded-full text-[10.5px] border border-[#a6e3a1]/25">
-              <CheckCircle className="w-3.5 h-3.5 text-[#a6e3a1]" /> 
-              <span>{lang === 'en' ? 'Success' : '已完成'}</span>
+            <span className="flex items-center gap-1.5 text-emerald-500 font-semibold bg-emerald-500/10 px-2.5 py-1 rounded-full text-[11px] border border-emerald-500/20">
+              <CheckCircle className="w-3.5 h-3.5" /> 
+              <span>{lang === 'en' ? 'Done' : '完成'}</span>
             </span>
           )}
           
-          <span className="text-[10px] text-slate-400 font-semibold bg-[#11111b] px-2 py-0.5 rounded border border-[#313244] flex items-center gap-1 hover:text-white transition-colors">
-            {isExpanded ? (lang === 'en' ? 'Hide' : '显示') : (lang === 'en' ? 'Show' : '展开')}
-            <ChevronDown className={`w-3 h-3 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
-          </span>
+          <button className="p-1.5 rounded-lg hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors">
+            <ChevronDown className={`w-4 h-4 transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+          </button>
         </div>
       </div>
 
-      {/* Terminal Content Panel */}
+      {/* Content Panel */}
       {isExpanded && (
-        <div className="p-4 bg-[#11111b]/95 font-mono text-[12px] leading-relaxed text-[#cdd6f4] overflow-x-auto max-h-80 border-t border-[#11111b] animate-in slide-in-from-top-2 duration-200">
-          {/* Shell line */}
-          <div className="flex items-center gap-2 text-slate-500 mb-2 select-none">
-            <span className="text-[#a6e3a1]">orca-agent</span>
-            <span className="text-slate-400">@</span>
-            <span className="text-[#89b4fa]">powershell</span>
-            <span className="text-[#cdd6f4]">$</span>
-            <span className="text-[#89dceb]">{block.toolName} --exec</span>
+        <div className="p-4 font-mono text-[12px] leading-relaxed overflow-x-auto animate-in slide-in-from-top-2 duration-200">
+          {/* Command line */}
+          <div className="flex items-center gap-2 text-[var(--color-text-muted)] mb-3 select-none">
+            <span className="text-emerald-500 font-bold">$</span>
+            <span className="text-[var(--color-text-secondary)]">{block.toolName}</span>
           </div>
           
-          {/* Code output console wrapper */}
-          <div className="overflow-x-auto bg-[#1e1e2e]/50 p-3 rounded-lg border border-[#313244]/40 font-mono select-text">
+          {/* Output */}
+          <div className="overflow-x-auto bg-[var(--color-bg-sidebar)] p-4 rounded-lg border border-[var(--color-border-base)] font-mono select-text text-[var(--color-text-primary)]">
             {renderDiffContent(block.content, isRunning)}
           </div>
         </div>

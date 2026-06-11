@@ -17,6 +17,11 @@
   --color-text-primary: #0f172a;
   --color-text-secondary: #475569;
   --color-text-muted: #94a3b8;
+
+  --color-error: #dc2626;
+  --color-error-bg: #fef2f2;
+  --color-code-bg: #1e1e2e;
+  --color-code-fg: #cdd6f4;
 }
 
 :root {
@@ -35,6 +40,11 @@
   --color-text-primary: #f8fafc;
   --color-text-secondary: #94a3b8;
   --color-text-muted: #475569;
+
+  --color-error: #f87171;
+  --color-error-bg: rgba(248,113,113,0.1);
+  --color-code-bg: #0d1117;
+  --color-code-fg: #c9d1d9;
 }
 
 body {
@@ -75,3 +85,90 @@ body {
 .animate-loading-bar {
   animation: loading-bar 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
+
+/* Markdown Typography Styles */
+.orca-markdown {
+  line-height: 1.7;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+.orca-markdown h1 { font-size: 1.5em; font-weight: 700; margin: 0.8em 0 0.4em; border-bottom: 1px solid var(--color-border-base); padding-bottom: 0.3em; }
+.orca-markdown h2 { font-size: 1.25em; font-weight: 700; margin: 0.7em 0 0.3em; }
+.orca-markdown h3 { font-size: 1.1em; font-weight: 600; margin: 0.6em 0 0.25em; }
+.orca-markdown h4, .orca-markdown h5, .orca-markdown h6 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; }
+.orca-markdown p { margin: 0.4em 0; }
+.orca-markdown ul, .orca-markdown ol { padding-left: 1.5em; margin: 0.4em 0; }
+.orca-markdown li { margin: 0.15em 0; }
+.orca-markdown li > ul, .orca-markdown li > ol { margin: 0.1em 0; }
+.orca-markdown blockquote {
+  border-left: 3px solid var(--color-primary);
+  margin: 0.5em 0;
+  padding: 0.3em 0.8em;
+  background: var(--color-bg-hover);
+  border-radius: 0 8px 8px 0;
+  color: var(--color-text-secondary);
+}
+.orca-markdown code {
+  background: var(--color-bg-hover);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.88em;
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', Menlo, monospace;
+}
+.orca-markdown pre {
+  background: #1e1e2e;
+  color: #cdd6f4;
+  padding: 1em;
+  border-radius: 10px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+.orca-markdown pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  color: inherit;
+}
+.orca-markdown table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+}
+.orca-markdown th, .orca-markdown td {
+  border: 1px solid var(--color-border-base);
+  padding: 0.4em 0.8em;
+  text-align: left;
+}
+.orca-markdown th {
+  background: var(--color-bg-hover);
+  font-weight: 600;
+}
+.orca-markdown a {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.orca-markdown a:hover { opacity: 0.8; }
+.orca-markdown hr {
+  border: none;
+  border-top: 1px solid var(--color-border-base);
+  margin: 1em 0;
+}
+.orca-markdown img {
+  max-width: 100%;
+  border-radius: 8px;
+}
+.orca-markdown input[type="checkbox"] {
+  margin-right: 0.4em;
+  accent-color: var(--color-primary);
+}
+
+/* Syntax Highlighting */
+.hl-kw { color: #cba6f7; font-weight: 600; }
+.hl-str { color: #a6e3a1; }
+.hl-cmt { color: #6c7086; font-style: italic; }
+.hl-num { color: #fab387; }
