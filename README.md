@@ -1,208 +1,130 @@
-# Orca Agentic Universal Proxy (Orca 智能代理网关)
+﻿# Orca Agentic Universal Proxy
 
-Orca Agentic Universal Proxy 是一款专为 AI 开发工具与桌面客户端打造的本地多模型智能代理服务器。支持 **Codex CLI**、**Claude 桌面端**、**Cursor/VSCode** 等工具适配，内置**智能体代理网关 (Agent Mode)**，支持本地 **Skills 技能库**与 **MCP 服务**深度接入。
+Orca 是一款专为 AI 开发工具打造的本地多模型智能代理服务器。
 
 ---
 
 ## 主要功能
 
-### 智能体模式与工具调用 (Agent Mode & Tool Execution)
-- **Plan / Build 双轨代理模式**：聊天面板底部支持在**规划模式**和**执行模式**之间切换
-  - **Plan 模式**：只读权限，智能体仅获得读取、搜索、列表文件等只读工具，专注调研与任务规划
-  - **Build 模式**：完全权限，在只读工具基础上额外注册写入文件、修补代码、终端指令执行、技能脚本执行及 MCP 服务等全部修改与执行工具
-- **本地 Skills 技能库与一键导入**：内置 53 个默认自动化技能，支持一键导入外部技能包
-- **本地 PowerShell 命令行沙箱**：允许大模型自主运行本地 shell/PowerShell 命令
-- **Office 文档与表格操作**：集成 python-docx、openpyxl、python-pptx、pandas 等专业 Office 处理库
-- **任务清单与进度跟踪 (Task Checklists)**：智能体执行复杂指令时生成交互式进度卡片，显示在聊天窗口顶部
-- **MCP 服务集成**：支持 Stdio (JSON-RPC over stdin/stdout) 协议的 MCP 服务器注册
+### 智能体模式
 
-### 高级 UI/UX 体验
-- **任务进度面板**：任务执行时在聊天窗口顶部实时显示任务进度
-- **智能滚动**：执行任务时可自由滚动查看历史消息，不会被强制拉回底部
-- **单模型消耗分布**：仪表盘顶部实时展示累计 Token 消耗模型排名
-- **可伸缩双栏面板**：聊天历史面板支持水平鼠标拖拽调整大小
-- **系统原生文件/目录选择**：使用 Electron 级别的原生系统目录对话框
+- **Build 模式**：完全权限，可读写文件、执行命令
+- **Plan 模式**：只读权限，专注调研与任务规划
+- **任务进度面板**：实时显示任务执行进度
+- **智能滚动**：执行任务时可自由查看历史消息
 
-### 灾备与运行优化
-- **Disaster Recovery (Failover 故障自愈)**：当前模型请求失败时自动依序在备用供应商节点中尝试
-- **Stream Retry (流式传输重试)**：流式读取失败时自动重试最多 3 次
-- **Output Truncation (输出截断)**：自动截断过大的工具输出，防止请求溢出
-- **Persistent Cache (重复请求拦截缓存)**：使用 SHA-256 对 prompt 进行哈希缓存
-- **Token Cost Tracking (Token 费率估算)**：支持为不同模型配置每百万 Tokens 的输入/输出价格
+### 工具集成
 
-### 多 API 协议转译与转换
-- **Codex CLI 适配**：自动将 OpenAI Responses API 转换为 Chat Completions API
-- **Claude 桌面端适配**：自动将 Anthropic Messages API 转换为 Chat Completions API
+- 53 个内置自动化技能
+- PowerShell 命令行沙箱
+- Office 文档操作 (Word/Excel/PPT)
+- MCP 服务集成
 
-### 全能的模型提供商集成
-原生集成 **DeepSeek**、**通义千问**、**智谱 AI**、**月之暗面 (Kimi)**、**百川智能**、**零一万物**、**豆包**、**硅基流动**、**小米 MiMo**、**OpenAI**、**Anthropic**，支持自定义 OpenAI 兼容提供商的添加、编辑与删除。
+### 模型供应商
 
-### 阿里云 Spec 驱动开发 (Aliyun Spec-Driven Development)
-- **API 规范解析**：支持 OpenAPI 3.0/Swagger 2.0 规范
-- **代码生成**：自动生成 TypeScript/Python 客户端代码
-- **测试生成**：自动生成单元测试、集成测试代码
-- **文档生成**：自动生成 API 文档，支持 Markdown/HTML 格式输出
+DeepSeek / 通义千问 / 智谱AI / 小米MiMo / OpenAI / Anthropic
+
+### 协议转译
+
+- Codex CLI 适配 (OpenAI API)
+- Claude Desktop 适配 (Anthropic API)
 
 ---
 
 ## 快速开始
 
-### 1. 一键安装与运行（推荐）
+### 方式一：直接运行（推荐）
 
-直接使用打包好的单文件可执行安装包即可，无需安装 Node.js/Electron 等开发依赖：
+`
+release/win-unpacked/electron.exe
+`
 
-1. 直接使用 Git 克隆或下载本仓库源码
-2. 双击打开项目目录下的 **release/win-unpacked/electron.exe** 即可启动
+### 方式二：源码运行
 
-> **注意**：如果想让智能体执行 Word、Excel、PPT 及 PDF 文件的自动操控与修改，请确保您的计算机中安装了 **Python 3 环境**。
-
-### 2. 本地源码安装与开发
-
-```bash
-# 安装依赖
+`ash
 npm install
-
-# 启动开发服务器（后端服务运行，前端热更新）
-npm run dev
-```
-
-### 3. 编译并打包应用
-
-```bash
-# 编译前端及后端代码
-npm run build
-
-# 启动 Electron 主程序
 npm start
+`
 
-# 打包为 Windows 客户端
-npm run package
-```
+### 方式三：开发模式
+
+`ash
+npm install
+npm run dev
+`
 
 ---
 
 ## 使用说明
 
-### 首次启动配置
+### 1. 配置 API 密钥
 
-1. **启动应用**：运行 `release/win-unpacked/electron.exe` 或通过源码 `npm start` 启动
-2. **配置 API 密钥**：
-   - 点击左侧导航栏的 **"供应商 (Providers)"** 页面
-   - 选择你要使用的模型供应商（如 DeepSeek、小米 MiMo 等）
-   - 输入对应的 API 密钥并保存
-3. **选择工作区**：
-   - 在聊天页面左侧，点击 **"+"** 按钮选择你的项目目录
-   - 智能体将在此目录下执行文件操作和命令
+启动应用后，进入「供应商」页面，选择模型供应商并输入 API 密钥。
 
-### 智能体聊天
+### 2. 选择工作区
 
-1. **选择模式**：
-   - **Build 模式**：智能体可以读写文件、执行命令、调用技能
-   - **Plan 模式**：智能体只能读取和分析文件，生成执行计划
-2. **发送任务**：在输入框中描述你的任务，智能体会自动：
-   - 生成任务清单（显示在聊天窗口顶部）
-   - 逐步执行任务
-   - 实时更新任务进度
-3. **查看历史**：执行过程中可以自由向上滚动查看历史消息
-4. **停止任务**：点击发送按钮旁的停止按钮可中断当前任务
+在聊天页面左侧点击「+」按钮，选择你的项目目录。
 
-### Codex CLI 接入
+### 3. 开始对话
 
-在系统环境变量中将 OpenAI 基础 URL 映射到 Orca 代理地址：
+- 选择 **Build** 或 **Plan** 模式
+- 输入任务描述
+- 智能体会自动执行并显示进度
 
-```powershell
+### 4. Codex CLI 接入
+
+`powershell
 $env:OPENAI_BASE_URL = "http://127.0.0.1:18080/v1"
 $env:OPENAI_API_KEY = "sk-dummy"
-codex "你好，请写一段快速排序"
-```
+codex "你好"
+`
 
-### Claude 桌面端接入
+### 5. Claude Desktop 接入
 
-打开 Claude Desktop 的配置文件：
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+编辑配置文件 %APPDATA%\Claude\claude_desktop_config.json：
 
-在配置中加入 proxy 选项：
-
-```json
+`json
 {
   "proxy": {
     "url": "http://127.0.0.1:18080"
   }
 }
-```
-
-### 应用管理
-
-在 **"应用 (Apps)"** 页面可以：
-- 自动检测已安装的 AI 工具（Codex CLI/Desktop、Claude CLI/Desktop 等）
-- 一键启动应用并自动注入代理环境
-- 为不同应用绑定不同的模型供应商
-
-### 仪表盘
-
-在 **"仪表盘 (Dashboard)"** 页面可以：
-- 查看总请求数、Token 消耗量、估算费用
-- 查看按日期/模型的 Token 消耗图表
-- 导出 CSV 数据
+`
 
 ---
 
 ## 项目结构
 
-```
+`
 orca/
-├── main.js             - Electron 主进程
-├── package.json        - 依赖及构建脚本
-├── tsconfig.json       - TypeScript 编译配置
-├── dist/               - 编译后的后端 bundle (bundle.js)
-├── src/                - 后端服务源码
-│   ├── index.ts        - Express 路由、流处理转发、API 安全管理
-│   ├── providers.ts    - 模型供应商管理、参数配置
-│   ├── transform.ts    - Responses API 相互转译
-│   ├── anthropic.ts    - Anthropic Messages <-> OpenAI 转译逻辑
-│   ├── cache.ts        - 磁盘 SHA-256 拦截缓存与流回放模拟
-│   └── mcp.ts          - Stdio MCP 客户端
-├── frontend/           - 前端源码 (React + Vite + Tailwind CSS)
-│   └── src/
-│       ├── pages/      - Chat, Settings, Apps, Dashboard, Logs, Skills, Providers
-│       ├── api.ts      - 前端 SSE 及 axios 请求库封装
-│       └── i18n.ts     - 国际化本地化映射表
-├── skills/             - 内置技能库（53 个自动化技能）
-│   └── aliyun-spec-driven/  - 阿里云 Spec 驱动开发技能
-└── data/               - 运行时数据目录（自动生成）
-    ├── config.json     - 本地持久化配置文件
-    ├── billing.json    - 计费统计数据
-    └── logs/
-        └── orca.log    - 磁盘审计日志文件
-```
+├── main.js           # Electron 主进程
+├── src/              # 后端源码
+│   ├── index.ts      # 服务端路由
+│   ├── providers.ts  # 模型供应商
+│   └── ...
+├── frontend/         # 前端源码 (React)
+├── skills/           # 内置技能库
+└── release/          # 打包输出
+`
 
 ---
 
 ## 常见问题
 
-### Q: 智能体执行任务时出现 "unexpected end of data" 错误
-A: 这通常是因为工具输出过大导致请求溢出。应用已自动限制工具输出大小（30KB），如仍有问题请检查任务是否产生了过大的输出。
+**Q: 出现 "unexpected end of data" 错误**
 
-### Q: 智能体执行任务时界面卡住不动
-A: 请检查网络连接和 API 密钥是否正确。长时间无响应可能是上游 API 超时，应用会自动重试最多 3 次。
+A: 工具输出过大导致，应用已自动限制输出大小。
 
-### Q: 如何切换模型供应商？
-A: 在聊天窗口底部的工具栏中，点击模型名称即可切换已配置的模型。
+**Q: 智能体执行任务时卡住**
 
-### Q: 日志页面一直刷新
-A: 日志页面默认每 5 秒自动刷新一次，可在页面顶部取消勾选 "自动刷新" 来关闭。
+A: 检查网络连接和 API 密钥是否正确。
 
----
+**Q: 如何切换模型？**
 
-## 贡献与许可
-
-本项目基于 MIT 协议开源。欢迎提交 Issue 和 Pull Request 来增加对更多供应商和实用小工具的支持。
+A: 点击聊天窗口底部的模型名称即可切换。
 
 ---
 
-## 致谢与开源借鉴声明
+## 许可证
 
-本项目在二次开发与智能体聊天模块的优化中，借鉴了以下开源项目的优秀设计与核心方案：
-
-- **OpenCode** ([anomalyco/opencode](https://github.com/anomalyco/opencode))：本项目的 Build / Plan 智能体双轨运行模式、智能体工具调用循环 (Tool Execution Loop) 以及聊天中终端工具卡片与进度状态展示的设计逻辑，合法借鉴并二次开发自 OpenCode 开源软件的优秀实现。
+MIT License
